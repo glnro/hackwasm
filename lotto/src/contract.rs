@@ -2,7 +2,7 @@ use std::cmp::min;
 use std::time::Duration;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Addr, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Timestamp, to_binary, Uint128};
 use schemars::schema::SingleOrVec::Vec;
 // use cw2::set_contract_version;
 
@@ -89,24 +89,26 @@ fn execute_create_lotto(deps: DepsMut, _env: Env, _info: MessageInfo, min_deposi
 fn execute_deposit_lotto(deps: DepsMut, _env: Env, info: MessageInfo, lotto_id: u32) -> Result<Response, ContractError>{
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
     let min_dep = lotto.min_deposit;
-    let mut current_dep: Uint128 = Default::default();
 
-    if info.funds.iter().any(|coin| {
-        coin.denom == min_dep.denom && coin.amount >= min_dep.amount
-    }){
-        current_dep = info.funds.get(0).unwrap().amount;
+    // Not sure the best way to go about validating the coin
+    let current_dep: Coin = info.funds.iter().filter(|coin| coin.denom == min_dep.denom && coin.amount >= min_dep.amount).collect();
+
+    if current_dep.denom == min_dep.denom && current_dep.amount >= min_dep.amount {
+        idx = lotto.depositors.len();
+        lotto.depositors[idx-1] = info.sender;
+        lotto.deposit_amount += current_dep;
+
+        LOTTOS.save(deps.storage, lotto_id, &lotto);
+
+        Ok(Response::new().add_attribute("action", "deposit")
+            .add_attribute("sender", info.sender.as_ref())
+            .add_attribute("deposit_amount", current_dep.to_string())
+        )
+    }else{
+        return Err(ContractError::InvalidAmount {val: "deposit must be larger than min_deposit and".to_string()})
     }
 
-    idx = lotto.depositors.len();
-    lotto.depositors[idx-1] = info.sender;
-    lotto.deposit_amount += current_dep;
 
-    LOTTOS.save(deps.storage, lotto_id, &lotto);
-
-    Ok(Response::new().add_attribute("action", "deposit")
-        .add_attribute("sender", info.sender.as_ref())
-        .add_attribute("deposit_amount", current_dep.to_string())
-        )
 }
 
 fn execute_payout(deps: DepsMut, _env: Env, _info: MessageInfo, lotto_id: u32) -> Result<Response, ContractError>{
@@ -121,7 +123,9 @@ pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
 }
 
 fn query_lotto_status(deps: DepsMut, _env: Env, _info: MessageInfo, lotto_id: u32) ->  StdResult<Binary>{
-    unimplemented!()
+    let lotto =LOTTOS.load(deps.storage, lotto_id)?;
+
+    to_binary(&LottoResponse{lotto})
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Coin, Uint128};
+use crate::state::Lotto;
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -27,4 +28,11 @@ pub enum QueryMsg {
     LottoStatus{
         lotto_id: u32,
     }
+}
+
+// GetLotto response, can be null or Lotto
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct GetLottoResponse {
+    pub lotto: Option<Lotto>,
 }
