@@ -1,6 +1,11 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Coin, Timestamp, Uint128};
+<<<<<<< HEAD
 
+=======
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+>>>>>>> f9230dd (wip)
 use cw_storage_plus::{Item, Map};
 
 // Initialize a contract with the admin address and lotto id generator nonce

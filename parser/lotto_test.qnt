@@ -2,27 +2,32 @@ module lotto {
   type Addr = str
   type GameId = int
   type Timestamp = int
+  type U32 = int
+  type U128 = int
+  type Coin = str
 
   pure val None: Addr = ""
 
-  type Config = {
+  type ss_Config = {
     manager: Addr,
-    lotto_nonce: int,
+    lotto_nonce: U32,
     nois_proxy: Addr
   }
 
-  type Lotto = {
-    nonce: int,
-    deposit: int, 
-    balance: int,
+  type ss_Lotto = {
+    nonce: U32,
+    deposit: Coin,
+    balance: U128,
     depositors: Set[Addr],
     expiration: Timestamp,
-    winner: Addr
+    o_winner: Addr
   }
 
   type ContractState = {
     config: Config,
     time: Timestamp,
+    nois_proxy: Addr,
+    min_dep: Coin,
     lottos: nonce -> lotto
   }
 
