@@ -23,12 +23,12 @@ module lotto {
     o_winner: Addr
   }
 
-  type ContractState = {
+  type SS_ContractState = {
     config: Config,
     time: Timestamp,
     nois_proxy: Addr,
     min_dep: Coin,
-    lottos: nonce -> lotto
+    lottos: U32 -> lotto
   }
 
   type Result = {
