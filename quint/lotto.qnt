@@ -1,31 +1,29 @@
 module lotto {
   type Addr = str
   type GameId = int
-  type Time = int
-
-  //const %winner,%community pool
+  type Timestamp = int
 
   pure val None: Addr = ""
 
   type Config = {
-    admin: Addr,
-    vault: Addr   // address to escrow deposits to --toDelete  
-    //nois contract: Addr
+    manager: Addr,
+    lotto_nonce: int,
+    nois_proxy: Addr
   }
 
-  type Game = {
-    players: Set[Addr],
-    amount: int, //participationAmount
-    //totalAmount: int,
-    winner: Addr,
-    expires: Time
+  type Lotto = {
+    nonce: int,
+    deposit: int, 
+    balance: int,
+    depositors: Set[Addr],
+    expiration: Timestamp,
+    winner: Addr
   }
 
   type ContractState = {
     config: Config,
-    time: Time,
-    gameIdCounter: GameId,
-    games: GameId -> Game
+    time: Timestamp,
+    lottos: nonce -> lotto
   }
 
   type Result = {
@@ -38,59 +36,62 @@ module lotto {
   }
 
   type InstantiateMsg = {
-    admin: Addr,
+    manager: Addr,
     vault: Addr
   }
 
   type DepositMsg = {
-    game: GameId,
-    amount : int
+    lotto: GameId,
+    deposit : int
   }
 
   type WinnerMsg = {
-    game: GameId,
+    lotto: GameId,
   }
 
-  type CreateLottoMsg = { amount: int, expires: Time }
+  type CreateLottoMsg = { 
+    deposit: int, 
+    expiration: Timestamp
+  }
 
   pure def instantiate(info: MessageInfo,
                        msg: InstantiateMsg): ContractState = {
     {
-      config: { admin: msg.admin, vault: msg.vault},
+      config: { manager: msg.manager, lotto_nonce: 0, nois_proxy: "nois" },
       time: 0,
-      gameIdCounter: 0,
-      games: Map()
+      lottos: Map()
     }
   }
 
   pure def execute_create_lotto(cs: ContractState, info: MessageInfo,
                                 msg: CreateLottoMsg): Result = {
-    if (cs.config.admin != info.sender) {
-      { err: "Unauthorized", cs: cs }
+    if (cs.config.manager != info.sender) {
+     { err: "Unauthorized", cs: cs }
     } else {
-      val new_game = { players: Set(), amount: msg.amount, winner: None, expires: msg.expires + cs.time } //The expiration date is current time + expiration duration
+     val nonce_lotto = cs.config.lotto_nonce
+     val new_lotto = { nonce: nonce_lotto, deposit: msg.deposit, depositors: Set(), winner: None, expiration: msg.expiration + cs.time } //The expiration date is current time + expiration duration
       { err: "", cs: { ...cs,
-          games: cs.games.put(cs.gameIdCounter, new_game),
-          gameIdCounter: cs.gameIdCounter + 1
-        }
+         lottos: cs.lottos.put(nonce_lotto, new_lotto),
+         config: { manager: cs.config.manager , lotto_nonce: nonce_lotto+1, nois_proxy: "nois" }
+       }
       }
     }
   }
 
   pure def execute_deposit(cs: ContractState, info: MessageInfo,
                            msg: DepositMsg): Result = {
-    if (not(cs.games.keys().contains(msg.game))) {
-      { err: "Game does not exist", cs: cs }
+    if (not(cs.lottos.keys().contains(msg.lotto))) {
+      { err: "Lotto does not exist", cs: cs }
     } else {
-      val game = cs.games.get(msg.game)
-      if (msg.amount != game.amount) {
-        { err: "Wrong amount", cs: cs}
+      val lotto = cs.lottos.get(msg.lotto)
+      if (msg.deposit != lotto.deposit) {
+        { err: "Wrong deposit amount", cs: cs}
       } else {
-        val updatedGame = {...game, players: game.players.union(Set(info.sender))}
-        val updatedGames = cs.games.set(msg.game, updatedGame)
-        // cw20-Send(info.sender, cs.config.vault, game.amount)
+        val updatedLotto = {...lotto, depositors: lotto.depositors.union(Set(info.sender))}
+        val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
+        // cw20-Send(info.sender, cs.config.vault, lotto.amount)
 
-        { err: "", cs: {...cs, games: updatedGames} }
+        { err: "", cs: {...cs, lottos: updatedLottos} }
       }
     }
   }
@@ -98,24 +99,24 @@ module lotto {
   //didn't check for expiration date
   pure def execute_winner(cs: ContractState, info: MessageInfo,
                                 msg: WinnerMsg): Result = {
-    if (cs.config.admin != info.sender) { // Verification that the function can't be used by participants, here it's admin only
+    if (cs.config.manager != info.sender) { // Verification that the function can't be used by participants, here it's admin only
       { err: "Unauthorized", cs: cs }
     } else {
-      if (not(cs.games.keys().contains(msg.game))) {
-      { err: "Game does not exist", cs: cs }
+      if (not(cs.lottos.keys().contains(msg.lotto))) {
+      { err: "Lotto does not exist", cs: cs }
       } else {
-        val game = cs.games.get(msg.game)
-        nondet gameWinner = game.players.oneOf() // To change with nois contract
-        val updatedGame = {...game, winner: gameWinner}
-        val updatedGames = cs.games.set(msg.game, updatedGame)
-        { err: "", cs: {...cs, games: updatedGames} }
+        val lotto = cs.lottos.get(msg.lotto)
+        nondet lottoWinner = lotto.depositors.oneOf() // To change with nois contract
+        val updatedLotto = {...lotto, winner: lottoWinner}
+        val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
+        { err: "", cs: {...cs, lottos: updatedLottos} }
      }
     }
   }
 }
 
 module tests {
-  import lotto.*
+  import lotto.* 
 
   var state: ContractState 
 
@@ -128,56 +129,56 @@ module tests {
   // >>> state
   action init = {
     val info = { sender: ADMIN }
-    val msg_inst = { admin: ADMIN, vault: VAULT }
+    val msg_inst = { manager: ADMIN, vault: VAULT }
     state' = instantiate(info, msg_inst)
   }
 
-  action exec_create_lotto(sender: Addr, amount: int, expires: Time): bool = {
+  action exec_create_lotto(sender: Addr, deposit: int, expiration: Timestamp): bool = {
     val info = { sender: sender }
-    val res = execute_create_lotto(state, info, {amount: amount, expires: expires})
+    val res = execute_create_lotto(state, info, {deposit: deposit, expiration: expiration})
     all {
       res.err == "",
       state' = res.cs
     }
   }
 
-  action exec_deposit(sender: Addr, gameId: GameId, amountTx :int): bool = {
+  action exec_deposit(sender: Addr, nonce: GameId, amountTx :int): bool = {
     val info = { sender: sender }
-    val res = execute_deposit(state, info, {game: gameId, amount: amountTx})
+    val res = execute_deposit(state, info, {lotto: nonce, deposit: amountTx})
     all {
       res.err == "",
       state' = res.cs
     }
   }
 
-  action exec_winner(sender: Addr, gameId: GameId): bool = {
+  action exec_winner(sender: Addr, nonce: GameId): bool = {
     val info = { sender: sender }
-    val res = execute_winner(state, info, {game: gameId})
+    val res = execute_winner(state, info, {lotto: nonce})
     all {
       res.err == "",
       state' = res.cs
     }
-    }
+  }
 
   action step = {
     any {
 
-      nondet amount = Int.oneOf()
-      nondet expires = Int.oneOf()
-      exec_create_lotto(ADMIN, amount, expires),
+      nondet deposit = Int.oneOf()
+      nondet expiration = Int.oneOf()
+      exec_create_lotto(ADMIN, deposit, expiration),
 
       nondet sender = USER_ADDR.oneOf()
-      nondet gameId = Nat.oneOf()
-      nondet amountTx = Int.oneOf()
-      exec_deposit(sender, gameId, amountTx),
+      nondet nonce = Nat.oneOf()
+      nondet deposit = Int.oneOf()
+      exec_deposit(sender, nonce, deposit),
       
-      nondet gameIdWin = Nat.oneOf() //Should be triggered by time when expiration date for any game occurs
-      exec_winner(ADMIN,gameIdWin)
+      nondet lottoWin = Nat.oneOf() //Should be triggered by time when expiration date for any game occurs
+      exec_winner(ADMIN,lottoWin)
     }
   }
 
   // $ quint run --main=tests --invariant=invAllGameAmountsPos lotto.qnt
-  val invAllGameAmountsPos = state.games.keys().forall(gameId =>
-    state.games.get(gameId).amount > 0
+  val invAllGameAmountsPos = state.lottos.keys().forall(gameId =>
+    state.lottos.get(gameId).deposit > 0
   )
 }
