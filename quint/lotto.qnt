@@ -5,31 +5,31 @@ module lotto {
   type Timestamp = int
   type U32 = int
   type U128 = int
-  type Coin = int //struct denom and amount
+  type Coin = int //replace by struct denom and amount in a second phase
 
   pure val None: Addr = ""
 
-  type Config = {
+  type SS_Config = {
     manager: Addr,
     lotto_nonce: U32,
     nois_proxy: Addr
   }
 
-  type Lotto = {
+  type SS_Lotto = {
     nonce: U32,
     deposit: Coin,
     balance: U128,
     depositors: Set[Addr],
     expiration: Timestamp,
-    winner: Addr
+    o_winner: Addr
   }
 
   type ContractState = {
-    config: Config,
+    config: SS_Config,
     time: Timestamp,
     nois_proxy: Addr,
     min_dep: Coin,
-    lottos: nonce -> lotto
+    lottos: U32 -> lotto
   }
 
   type Result = {
@@ -90,18 +90,23 @@ module lotto {
     if (not(cs.lottos.keys().contains(msg.lotto))) {
       { err: "Lotto does not exist", cs: cs }
     } else {
-      val lotto = cs.lottos.get(msg.lotto)
-      if (msg.deposit != lotto.deposit) {
-        { err: "Wrong deposit amount", cs: cs}
-      } else {
-        val updatedLotto = {...lotto, depositors: lotto.depositors.union(Set(info.sender))}
-        val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
-        // cw20-Send(info.sender, cs.config.vault, lotto.amount)
-
-        { err: "", cs: {...cs, lottos: updatedLottos} }
+        val lotto = cs.lottos.get(msg.lotto)
+      // Check if lotto is active
+        if (lotto.winner != None) {
+         { err: "Lotto not active", cs: cs }
+        }
+        else {
+          if (msg.deposit != lotto.deposit) {
+            { err: "Wrong deposit amount", cs: cs}
+          } else {
+             val updatedLotto = {...lotto, depositors: lotto.depositors.union(Set(info.sender))}
+             val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
+              // cw20-Send(info.sender, cs.config.vault, lotto.amount)
+             { err: "", cs: {...cs, lottos: updatedLottos} }
+          }
+        }
       }
-    }
-  }
+   }
 
   //didn't check for expiration date
   pure def execute_winner(cs: ContractState, info: MessageInfo,
@@ -114,11 +119,11 @@ module lotto {
       } else {
         val lotto = cs.lottos.get(msg.lotto)
         // Check if lotto is active
-        if (lotto.winner != "") {
+        if (lotto.winner != None) {
          { err: "Lotto not active", cs: cs }
         }
         else  {
-        nondet lottoWinner = lotto.depositors.oneOf() // To change with nois contract
+        nondet lottoWinner = lotto.depositors.oneOf() // To change with nois contract and verify first that it's not an empty set
         val updatedLotto = {...lotto, winner: lottoWinner}
         val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
         { err: "", cs: {...cs, lottos: updatedLottos} }
@@ -190,11 +195,16 @@ module tests {
   }
 
   // $ quint run --main=tests --invariant=invAllGameAmountsPos lotto.qnt
-  val invAllGameAmountsPos = state.lottos.keys().forall(gameId =>
-    state.lottos.get(gameId).deposit > 0
+  val invAllGameAmountsPos = state.lottos.keys().forall(lottoId =>
+    state.lottos.get(lottoId).deposit > 0
   )
 
-  //winner should never be the manager
+  //winner should never be the manager.
+  val invWinnerIsNeverWinner = state.lottos.keys().forall(lottoId =>
+    state.lottos.get(lottoId).winner != ADMIN
+  )
+
+  //We cannot compute a new winner when the lotto is not active anymore.
 
   //users should send the exact deposit, not less, not more
 
