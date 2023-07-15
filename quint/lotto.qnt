@@ -113,10 +113,16 @@ module lotto {
       { err: "Lotto does not exist", cs: cs }
       } else {
         val lotto = cs.lottos.get(msg.lotto)
+        // Check if lotto is active
+        if (lotto.winner != "") {
+         { err: "Lotto not active", cs: cs }
+        }
+        else  {
         nondet lottoWinner = lotto.depositors.oneOf() // To change with nois contract
         val updatedLotto = {...lotto, winner: lottoWinner}
         val updatedLottos = cs.lottos.set(msg.lotto, updatedLotto)
         { err: "", cs: {...cs, lottos: updatedLottos} }
+       } 
      }
     }
   }
@@ -188,7 +194,7 @@ module tests {
     state.lottos.get(gameId).deposit > 0
   )
 
-  //winner shouldn't be the admin
+  //winner should never be the manager
 
   //users should send the exact deposit, not less, not more
 
