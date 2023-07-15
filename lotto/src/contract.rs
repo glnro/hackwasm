@@ -1,15 +1,17 @@
-use std::cmp::min;
-use std::time::Duration;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Addr, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Timestamp, to_binary, Uint128};
-use schemars::schema::SingleOrVec::Vec;
+use cosmwasm_std::{
+    to_binary, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128,
+};
+use nois::NoisCallback;
+
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{Config, CONFIG, CONFIG_KEY, Lotto, LOTTOS};
-use crate::state::{NOIS_PROXY};
+use crate::msg::{self, ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::{Config, Lotto, CONFIG, LOTTOS};
+
+const GAME_DURATION: u64 = 300;
 
 /*
 // version info for migration info
@@ -24,94 +26,134 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-
     // validate address is correct
-    let addr = deps.api.addr_validate(&info.sender.as_ref())
-        .map_err(|_| ContractError::InvalidAddress)?;
+    let addr = deps
+        .api
+        .addr_validate(&info.sender.as_ref())
+        .map_err(|_| ContractError::InvalidAddress {})?;
 
-    let proxy = deps.api.addr_validate(&msg.nois_proxy)
-        .map_err(|_| ContractError::InvalidAddress)?;
+    let proxy = deps
+        .api
+        .addr_validate(&msg.nois_proxy)
+        .map_err(|_| ContractError::InvalidAddress {})?;
 
-    let cnfg = Config{
-        manager_addr: addr ,
+    let cnfg = Config {
+        manager: addr,
         lotto_nonce: 0,
         nois_proxy: proxy,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
 
-    Ok(Response::new().add_attribute("action","instantiate")
-        .add_attribute("manager", info.sender)
-    )
+    Ok(Response::new()
+        .add_attribute("action", "instantiate")
+        .add_attribute("manager", info.sender))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
-    _deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
     _msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::CreateLotto { min_deposit } => execute_create_lotto(deps, env, info, min_deposit),
+        ExecuteMsg::CreateLotto { deposit } => execute_create_lotto(deps, env, info, deposit),
         ExecuteMsg::Deposit { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
-        ExecuteMsg::RandomnessReceive { lotto_id } => execute_payout(deps, env, info, lotto_id),
+        ExecuteMsg::NoisReceive { callback } => execute_payout(deps, env, info, callback),
     }
 }
 
-fn execute_create_lotto(deps: DepsMut, _env: Env, _info: MessageInfo, min_deposit: Coin, expiration_date: Timestamp) -> Result<Response, ContractError>{
-    // TODO: validate default denom
-
-    // validate min deposit
-    if min_deposit.amount <= 0 {
-        return Err(ContractError::InvalidAmount {val: "min_deposit must be larger than 0".to_string()})
-    }
-
+fn execute_create_lotto(
+    deps: DepsMut,
+    env: Env,
+    _info: MessageInfo,
+    deposit: Coin,
+) -> Result<Response, ContractError> {
     // validate Timestamp
+    let mut config = CONFIG.load(deps.storage)?;
+    let mut nonce = config.lotto_nonce;
 
-    let state = CONFIG.load(deps.storage)?;
-    let id = state.lotto_nonce;
-    let lotto = Lotto{ nonce: id,
-        min_deposit: min_deposit,
-        deposit_amount: Uint128(0),
-        depositors: Vec::new(),
-        expiration: expiration_date,
-        winner: None };
+    let expiration = env.block.time.plus_seconds(GAME_DURATION);
 
-    LOTTOS.save(deps.storage, id, &lotto)?;
-    lotto_nonce += 1;
+    let lotto = Lotto {
+        nonce,
+        deposit,
+        deposit_amount: Uint128::new(0),
+        depositors: vec![],
+        expiration,
+        winner: None,
+    };
+    nonce += 1;
+
+    LOTTOS.save(deps.storage, nonce, &lotto)?;
+    config.lotto_nonce = nonce;
+    CONFIG.save(deps.storage, &config)?;
+
     // save config
-    Ok(Response::new().add_attribute("action", "create_lotto")
-        .add_attribute("next_nonce", id))
+    Ok(Response::new()
+        .add_attribute("action", "create_lotto")
+        .add_attribute("next_nonce", nonce.to_string()))
 }
 
+fn validate_payment(deposit: &Coin, funds: &[Coin]) -> Result<(), ContractError> {
+    if funds.is_empty() {
+        return Err(ContractError::NoFundsProvided);
+    }
+    // TODO disallow participant to deposit more than one denom
 
-fn execute_deposit_lotto(deps: DepsMut, _env: Env, info: MessageInfo, lotto_id: u32) -> Result<Response, ContractError>{
+    for fund in funds {
+        if deposit == fund {
+            return Ok(());
+        }
+    }
+    Err(ContractError::InvalidPayment)
+}
+
+fn execute_deposit_lotto(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    lotto_id: u32,
+) -> Result<Response, ContractError> {
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
-    let min_dep = lotto.min_deposit;
+    let deposit = lotto.deposit;
 
     // Not sure the best way to go about validating the coin
-    let current_dep: Coin = info.funds.iter().filter(|coin| coin.denom == min_dep.denom && coin.amount >= min_dep.amount).collect();
+    validate_payment(&deposit, info.funds.as_slice());
 
-    if current_dep.denom == min_dep.denom && current_dep.amount >= min_dep.amount {
-        idx = lotto.depositors.len();
-        lotto.depositors[idx-1] = info.sender;
-        lotto.deposit_amount += current_dep;
-
-        LOTTOS.save(deps.storage, lotto_id, &lotto);
-
-        Ok(Response::new().add_attribute("action", "deposit")
-            .add_attribute("sender", info.sender.as_ref())
-            .add_attribute("deposit_amount", current_dep.to_string())
-        )
-    }else{
-        return Err(ContractError::InvalidAmount {val: "deposit must be larger than min_deposit and".to_string()})
+    // Check if lotto is active
+    if env.block.time >= lotto.expiration {
+        return Err(ContractError::InvalidAddress {});
     }
+    // Increment total deposit
+    let balance: &Coin = info
+        .funds
+        .clone()
+        .iter()
+        .filter(|coin| coin.denom == lotto.deposit.denom)
+        .last()
+        .unwrap();
 
+    lotto.balance += balance.amount;
+    // Add depositor address
+    lotto.depositors.push(info.sender);
 
+    // Save the state
+    LOTTOS.save(deps.storage, lotto_id, &lotto);
+
+    Ok(Response::new()
+        .add_attribute("action", "deposit")
+        .add_attribute("sender", info.sender.as_ref())
+        .add_attribute("new_balance", lotto.balance.to_string()))
 }
 
-fn execute_payout(deps: DepsMut, _env: Env, _info: MessageInfo, lotto_id: u32) -> Result<Response, ContractError>{
+fn execute_payout(
+    deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    callback: NoisCallback,
+) -> Result<Response, ContractError> {
     unimplemented!()
 }
 
@@ -122,10 +164,15 @@ pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
     }
 }
 
-fn query_lotto_status(deps: DepsMut, _env: Env, _info: MessageInfo, lotto_id: u32) ->  StdResult<Binary>{
-    let lotto =LOTTOS.load(deps.storage, lotto_id)?;
+fn query_lotto_status(
+    deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    lotto_id: u32,
+) -> StdResult<Binary> {
+    let lotto = LOTTOS.load(deps.storage, lotto_id)?;
 
-    to_binary(&LottoResponse{lotto})
+    to_binary(&LottoResponse { lotto })
 }
 
 #[cfg(test)]

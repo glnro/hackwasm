@@ -1,3 +1,4 @@
+use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Coin, Timestamp, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -5,16 +6,18 @@ use serde::{Deserialize, Serialize};
 use cw_storage_plus::{Item, Map};
 
 // Initialize a contract with the admin address and lotto id generator nonce
+#[cw_serde]
 pub struct Config {
-    pub manager_addr: Addr,
+    pub manager: Addr,
     pub lotto_nonce: u32,
     pub nois_proxy: Addr,
 }
 
+#[cw_serde]
 pub struct Lotto {
     pub nonce: u32,
-    pub min_deposit: Coin,
-    pub deposit_amount: Uint128,
+    pub deposit: Coin,
+    pub balance: Uint128,
     pub depositors: Vec<Addr>,
     pub expiration: Timestamp, // how to set expiration
     pub winner: Option<Addr>,

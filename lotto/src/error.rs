@@ -10,10 +10,15 @@ pub enum ContractError {
     Unauthorized {},
     // Add any other custom errors you like here.
     // Look at https://docs.rs/thiserror/1.0.21/thiserror/ for details.
-
     #[error("Invalid Address")]
     InvalidAddress {},
 
     #[error("Invalid Amount: {val:?}")]
     InvalidAmount { val: String },
+
+    #[error("No Funds Provided")]
+    NoFundsProvided,
+
+    #[error("Invalid Payment")]
+    InvalidPayment,
 }
