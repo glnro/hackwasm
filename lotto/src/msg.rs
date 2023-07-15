@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::Uint128;
+use cosmwasm_std::{Coin, Uint128};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -10,7 +10,7 @@ pub struct InstantiateMsg {
 #[cw_serde]
 pub enum ExecuteMsg {
     CreateLotto{
-        min_deposit: Uint128
+        min_deposit: Coin
         // Can already book the safe randomness after this timestamp (faster)
     },
     Deposit{

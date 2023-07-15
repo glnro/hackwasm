@@ -13,4 +13,7 @@ pub enum ContractError {
 
     #[error("Invalid Address")]
     InvalidAddress {},
+
+    #[error("Invalid Amount: {val:?}")]
+    InvalidAmount { val: String },
 }
