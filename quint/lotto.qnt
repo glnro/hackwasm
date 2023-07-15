@@ -1,20 +1,24 @@
 module lotto {
+
   type Addr = str
   type GameId = int
   type Timestamp = int
+  type U32 = int
+  type U128 = int
+  type Coin = int //struct denom and amount
 
   pure val None: Addr = ""
 
   type Config = {
     manager: Addr,
-    lotto_nonce: int,
+    lotto_nonce: U32,
     nois_proxy: Addr
   }
 
   type Lotto = {
-    nonce: int,
-    deposit: int, 
-    balance: int,
+    nonce: U32,
+    deposit: Coin,
+    balance: U128,
     depositors: Set[Addr],
     expiration: Timestamp,
     winner: Addr
@@ -23,6 +27,8 @@ module lotto {
   type ContractState = {
     config: Config,
     time: Timestamp,
+    nois_proxy: Addr,
+    min_dep: Coin,
     lottos: nonce -> lotto
   }
 
@@ -37,12 +43,11 @@ module lotto {
 
   type InstantiateMsg = {
     manager: Addr,
-    vault: Addr
   }
 
   type DepositMsg = {
     lotto: GameId,
-    deposit : int
+    deposit : Coin
   }
 
   type WinnerMsg = {
@@ -50,7 +55,7 @@ module lotto {
   }
 
   type CreateLottoMsg = { 
-    deposit: int, 
+    deposit: Coin, 
     expiration: Timestamp
   }
 
@@ -59,7 +64,9 @@ module lotto {
     {
       config: { manager: msg.manager, lotto_nonce: 0, nois_proxy: "nois" },
       time: 0,
-      lottos: Map()
+      lottos: Map(),
+      nois_proxy: "nois",
+      min_dep: 5
     }
   }
 
@@ -129,11 +136,11 @@ module tests {
   // >>> state
   action init = {
     val info = { sender: ADMIN }
-    val msg_inst = { manager: ADMIN, vault: VAULT }
+    val msg_inst = { manager: ADMIN }
     state' = instantiate(info, msg_inst)
   }
 
-  action exec_create_lotto(sender: Addr, deposit: int, expiration: Timestamp): bool = {
+  action exec_create_lotto(sender: Addr, deposit: Coin, expiration: Timestamp): bool = {
     val info = { sender: sender }
     val res = execute_create_lotto(state, info, {deposit: deposit, expiration: expiration})
     all {
@@ -162,7 +169,6 @@ module tests {
 
   action step = {
     any {
-
       nondet deposit = Int.oneOf()
       nondet expiration = Int.oneOf()
       exec_create_lotto(ADMIN, deposit, expiration),
@@ -181,4 +187,12 @@ module tests {
   val invAllGameAmountsPos = state.lottos.keys().forall(gameId =>
     state.lottos.get(gameId).deposit > 0
   )
+
+  //winner shouldn't be the admin
+
+  //users should send the exact deposit, not less, not more
+
+  //users should'nt be able to participate twice
+
+  //users shouldn't be able to 
 }
