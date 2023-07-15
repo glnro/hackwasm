@@ -1,0 +1,7 @@
+{
+  "project_name_token": "module ",
+  "state": {
+    "structs" : "state_struct",
+    "consts": "state_const"
+  }
+}
