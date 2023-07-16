@@ -30,7 +30,7 @@ var (
 )
 
 func main() {
-	file, err := os.Open("./lotto_test.qnt")
+	file, err := os.Open("../quint/lotto.qnt")
 	if err != nil {
 		fmt.Errorf("Unable to open file")
 		return

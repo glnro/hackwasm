@@ -24,7 +24,7 @@ module lotto {
     o_winner: Addr
   }
 
-  type ContractState = {
+  type SS_ContractState = {
     config: SS_Config,
     time: Timestamp,
     nois_proxy: Addr,
@@ -34,7 +34,7 @@ module lotto {
 
   type Result = {
     err: str,
-    cs: ContractState
+    cs: SS_ContractState
   }
 
   type MessageInfo = {
@@ -60,7 +60,7 @@ module lotto {
   }
 
   pure def instantiate(info: MessageInfo,
-                       msg: InstantiateMsg): ContractState = {
+                       msg: InstantiateMsg): SS_ContractState = {
     {
       config: { manager: msg.manager, lotto_nonce: 0, nois_proxy: "nois" },
       time: 0,
@@ -70,7 +70,7 @@ module lotto {
     }
   }
 
-  pure def execute_create_lotto(cs: ContractState, info: MessageInfo,
+  pure def execute_create_lotto(cs: SS_ContractState, info: MessageInfo,
                                 msg: CreateLottoMsg): Result = {
     if (cs.config.manager != info.sender) {
      { err: "Unauthorized", cs: cs }
@@ -85,7 +85,7 @@ module lotto {
     }
   }
 
-  pure def execute_deposit(cs: ContractState, info: MessageInfo,
+  pure def execute_deposit(cs: SS_ContractState, info: MessageInfo,
                            msg: DepositMsg): Result = {
     if (not(cs.lottos.keys().contains(msg.lotto))) {
       { err: "Lotto does not exist", cs: cs }
@@ -109,7 +109,7 @@ module lotto {
    }
 
   //didn't check for expiration date
-  pure def execute_winner(cs: ContractState, info: MessageInfo,
+  pure def execute_winner(cs: SS_ContractState, info: MessageInfo,
                                 msg: WinnerMsg): Result = {
     if (cs.config.manager != info.sender) { // Verification that the function can't be used by participants, here it's admin only
       { err: "Unauthorized", cs: cs }
@@ -136,7 +136,7 @@ module lotto {
 module tests {
   import lotto.* 
 
-  var state: ContractState 
+  var state: SS_ContractState 
 
   pure val ADMIN: Addr = "admin"
   pure val VAULT: Addr = "vault"
