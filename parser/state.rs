@@ -7,7 +7,7 @@ use cw_storage_plus::{Item, Map};
 #[cw_serde]
 pub struct Config {
 	pub manager: Addr,
-	pub lotto_nonce: u32,
+	pub lotto_nonce: Option<u32>,
 	pub nois_proxy: Addr,
 }
 
