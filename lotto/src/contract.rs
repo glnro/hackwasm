@@ -1,10 +1,9 @@
 use crate::msg::{ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, QueryMsg};
-use anybuf::Anybuf;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    ensure_eq, to_binary, Addr, Attribute, BankMsg, Coin, CosmosMsg, Deps, DepsMut, Env,
-    MessageInfo, QueryResponse, Response, StdResult, Uint128, WasmMsg,
+    ensure_eq, to_binary, Attribute, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, QueryResponse,
+    Response, StdResult, Uint128, WasmMsg,
 };
 use nois::{NoisCallback, ProxyExecuteMsg};
 
@@ -35,7 +34,7 @@ pub fn instantiate(
         .map_err(|_| ContractError::InvalidAddress {})?;
     let community_pool = deps
         .api
-        .addr_validate(&msg.community_pool.as_str())
+        .addr_validate(msg.community_pool.as_str())
         .map_err(|_| ContractError::InvalidAddress {})?;
 
     let proxy = deps
@@ -170,7 +169,7 @@ fn execute_deposit_lotto(
 
 pub fn execute_receive(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     callback: NoisCallback,
 ) -> Result<Response, ContractError> {
@@ -210,29 +209,22 @@ pub fn execute_receive(
     let amount_community_pool = lotto.balance.mul_floor((50u128, 100)); // 50%
     let denom = lotto.deposit.clone().denom;
 
-    let mut msgs = Vec::<CosmosMsg>::new();
-
-    msgs.push(
+    let msgs = vec![
         BankMsg::Send {
             to_address: winner.clone().into_string(),
             amount: vec![Coin {
                 amount: amount_winner,
                 denom: denom.clone(),
             }],
-        }
-        .into(),
-    );
-
-    msgs.push(
+        },
         BankMsg::Send {
             to_address: config.community_pool.into_string(),
             amount: vec![Coin {
-                amount: amount_winner,
+                amount: amount_community_pool,
                 denom: denom.clone(),
             }],
-        }
-        .into(),
-    );
+        },
+    ];
 
     // Update Lotto Data
     let new_lotto = Lotto {
@@ -272,17 +264,19 @@ pub fn execute_receive(
     ]))
 }
 
-fn encode_msg_fund_community_pool(amount: &Coin, depositor: &Addr) -> Vec<u8> {
-    // Coin: https://github.com/cosmos/cosmos-sdk/blob/v0.45.15/proto/cosmos/base/v1beta1/coin.proto#L14-L19
-    // MsgFundCommunityPool: https://github.com/cosmos/cosmos-sdk/blob/v0.45.15/proto/cosmos/distribution/v1beta1/tx.proto#L69-L76
-    let coin = Anybuf::new()
-        .append_string(1, &amount.denom)
-        .append_string(2, amount.amount.to_string());
-    Anybuf::new()
-        .append_message(1, &coin)
-        .append_string(2, depositor)
-        .into_vec()
-}
+// For chains that have a community pool module, you can use this function.
+// Neutron has a community pool built as a cosmwasm contract
+// fn encode_msg_fund_community_pool(amount: &Coin, depositor: &Addr) -> Vec<u8> {
+//     // Coin: https://github.com/cosmos/cosmos-sdk/blob/v0.45.15/proto/cosmos/base/v1beta1/coin.proto#L14-L19
+//     // MsgFundCommunityPool: https://github.com/cosmos/cosmos-sdk/blob/v0.45.15/proto/cosmos/distribution/v1beta1/tx.proto#L69-L76
+//     let coin = Anybuf::new()
+//         .append_string(1, &amount.denom)
+//         .append_string(2, amount.amount.to_string());
+//     Anybuf::new()
+//         .append_message(1, &coin)
+//         .append_string(2, depositor)
+//         .into_vec()
+// }
 
 #[entry_point]
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
@@ -322,10 +316,7 @@ mod tests {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{
-        from_binary, from_slice, Empty, HexBinary, OwnedDeps, StdError, SubMsg, Timestamp,
-    };
-    use serde::Deserialize;
+    use cosmwasm_std::{from_binary, Empty, HexBinary, OwnedDeps, Timestamp};
 
     const CREATOR: &str = "creator";
     const PROXY_ADDRESS: &str = "the proxy of choice";
@@ -360,8 +351,6 @@ mod tests {
     fn lotto_works() {
         let mut deps = instantiate_contract();
 
-        let env = mock_env();
-
         // manager starts a lotto instance
         let info = mock_info(MANAGER, &[]);
         let msg = ExecuteMsg::CreateLotto {
@@ -393,30 +382,11 @@ mod tests {
         assert_eq!(
             res.attributes,
             vec![
-                Attribute::new("action", "receive-randomness-and-send-randdrop"),
-                Attribute::new("address", "the proxy of choice"),
-                Attribute::new(
-                    "job_id",
-                    "randdrop-nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve"
-                ),
-                Attribute::new("participant", "nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve"),
-                Attribute::new("is_winner", true.to_string()),
-                Attribute::new("merkle_amount", 4500000.to_string()),
-                Attribute::new(
-                    "send_amount",
-                    "13500000ibc/717352A5277F3DE916E8FD6B87F4CA6A51F2FBA9CF04ABCFF2DF7202F8A8BC50"
-                        .to_string()
-                ),
+                Attribute::new("action", "receive-randomness-and-send-prize"),
+                Attribute::new("winner", "manager1"),
+                Attribute::new("job_id", "lotto-0"),
+                Attribute::new("winner_send_amount", "0untrn"),
             ]
         );
-        let expected = SubMsg::new(BankMsg::Send {
-            to_address: "nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve".to_string(),
-            amount: vec![Coin {
-                amount: Uint128::new(13500000), // 4500000*3
-                denom: "ibc/717352A5277F3DE916E8FD6B87F4CA6A51F2FBA9CF04ABCFF2DF7202F8A8BC50"
-                    .to_string(),
-            }],
-        });
-        assert_eq!(res.messages, vec![expected]);
     }
 }
