@@ -21,4 +21,13 @@ pub enum ContractError {
 
     #[error("Invalid Payment")]
     InvalidPayment,
+
+    #[error("Unauthorized Receive")]
+    UnauthorizedReceive,
+
+    #[error("Invalid Randomness")]
+    InvalidRandomness,
+
+    #[error("No Depositors")]
+    NoDepositors,
 }
