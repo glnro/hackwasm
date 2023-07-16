@@ -5,7 +5,8 @@ module lotto {
   type Timestamp = int
   type U32 = int
   type U128 = int
-  type Coin = int //replace by struct denom and amount in a second phase
+  type Coin = int
+  //replace by struct denom and amount in a second phase
 
   pure val None: Addr = ""
 
@@ -24,17 +25,15 @@ module lotto {
     o_winner: Addr
   }
 
-  type SS_ContractState = {
+  type SCS_ContractState = {
     config: SS_Config,
     time: Timestamp,
-    nois_proxy: Addr,
-    min_dep: Coin,
     lottos: U32 -> lotto
   }
 
   type Result = {
     err: str,
-    cs: SS_ContractState
+    cs: SCS_ContractState
   }
 
   type MessageInfo = {
@@ -60,7 +59,7 @@ module lotto {
   }
 
   pure def instantiate(info: MessageInfo,
-                       msg: InstantiateMsg): SS_ContractState = {
+                       msg: InstantiateMsg): SCS_ContractState = {
     {
       config: { manager: msg.manager, lotto_nonce: 0, nois_proxy: "nois" },
       time: 0,
@@ -70,7 +69,7 @@ module lotto {
     }
   }
 
-  pure def execute_create_lotto(cs: SS_ContractState, info: MessageInfo,
+  pure def execute_create_lotto(cs: SCS_ContractState, info: MessageInfo,
                                 msg: CreateLottoMsg): Result = {
     if (cs.config.manager != info.sender) {
      { err: "Unauthorized", cs: cs }
@@ -85,7 +84,7 @@ module lotto {
     }
   }
 
-  pure def execute_deposit(cs: SS_ContractState, info: MessageInfo,
+  pure def execute_deposit(cs: SCS_ContractState, info: MessageInfo,
                            msg: DepositMsg): Result = {
     if (not(cs.lottos.keys().contains(msg.lotto))) {
       { err: "Lotto does not exist", cs: cs }
@@ -109,7 +108,7 @@ module lotto {
    }
 
   //didn't check for expiration date
-  pure def execute_winner(cs: SS_ContractState, info: MessageInfo,
+  pure def execute_winner(cs: SCS_ContractState, info: MessageInfo,
                                 msg: WinnerMsg): Result = {
     if (cs.config.manager != info.sender) { // Verification that the function can't be used by participants, here it's admin only
       { err: "Unauthorized", cs: cs }
@@ -136,7 +135,7 @@ module lotto {
 module tests {
   import lotto.* 
 
-  var state: SS_ContractState 
+  var state: SCS_ContractState
 
   pure val ADMIN: Addr = "admin"
   pure val VAULT: Addr = "vault"

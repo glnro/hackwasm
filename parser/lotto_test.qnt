@@ -26,8 +26,6 @@ module lotto {
   type SS_ContractState = {
     config: Config,
     time: Timestamp,
-    nois_proxy: Addr,
-    min_dep: Coin,
     lottos: U32 -> lotto
   }
 

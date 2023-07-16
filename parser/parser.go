@@ -30,7 +30,7 @@ var (
 )
 
 func main() {
-	file, err := os.Open("./lotto_test.qnt")
+	file, err := os.Open("../quint/lotto.qnt")
 	if err != nil {
 		fmt.Errorf("Unable to open file")
 		return
@@ -53,11 +53,11 @@ func main() {
 }
 
 func hasStruct(line string) bool {
-	return strings.Contains(line, "ss_")
+	return strings.Contains(line, "SS_")
 }
 
 func hasContractState(line string) bool {
-	return strings.Contains(line, "SS_ContractState")
+	return strings.Contains(line, "SCS_ContractState")
 }
 
 func parseContractState(lines []string, start int) int {
@@ -125,6 +125,7 @@ func parseStructs(lines []string) {
 			fmt.Printf("Current index: %d\n", i)
 			newCursor := parseContractState(lines, i)
 			fmt.Printf("This is the new cursor value: %d\n\n", newCursor)
+			return
 		}
 	}
 }
@@ -162,7 +163,7 @@ func writeStruct(name string, fields map[string]string) {
 
 func getStructName(line string) string {
 	tokens := strings.Fields(line)
-	trimmed := strings.Trim(tokens[1], "ss_")
+	trimmed := strings.Trim(tokens[1], "SS_")
 	return trimmed
 }
 
@@ -232,7 +233,7 @@ func writeLines(lines []string, filename string) {
 }
 
 func writeImports(file string) error {
-	imports := fmt.Sprintf("use cosmwasm_schema::cw_serde;\nuse cosmwasm_std::{Addr, Coin, Timestamp, Uint128};\nuse schemars::JsonSchema;\nuse serde::{Deserialize, Serialize};\nuse cw_storage_plus::{Item, Map};\n")
+	imports := fmt.Sprintf("use cosmwasm_schema::cw_serde;\nuse cosmwasm_std::{Addr, Coin, Timestamp, Uint128};\nuse cw_storage_plus::{Item, Map};\n")
 
 	f, err := os.Create(file)
 	if err != nil {
