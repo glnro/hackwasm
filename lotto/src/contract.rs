@@ -13,7 +13,7 @@ use nois::{NoisCallback, ProxyExecuteMsg};
 use crate::error::ContractError;
 use crate::state::{Config, Lotto, CONFIG, LOTTOS};
 
-const GAME_DURATION: u64 = 120;
+const GAME_DURATION: u64 = 90;
 
 /*
 // version info for migration info
@@ -31,7 +31,7 @@ pub fn instantiate(
     // validate address is correct
     let addr = deps
         .api
-        .addr_validate(info.sender.as_ref())
+        .addr_validate(msg.manager.as_str())
         .map_err(|_| ContractError::InvalidAddress {})?;
 
     let proxy = deps
@@ -86,14 +86,11 @@ fn execute_create_lotto(
         expiration,
         winner: None,
     };
-    nonce += 1;
 
     LOTTOS.save(deps.storage, nonce, &lotto)?;
-    config.lotto_nonce = nonce;
-    CONFIG.save(deps.storage, &config)?;
 
     let msg = WasmMsg::Execute {
-        contract_addr: config.nois_proxy.into_string(),
+        contract_addr: config.clone().nois_proxy.into_string(),
         // GetRandomnessAfter requests the randomness from the proxy after a specific timestamp
         // The job id is needed to know what randomness we are referring to upon reception in the callback.
         msg: to_binary(&ProxyExecuteMsg::GetRandomnessAfter {
@@ -103,6 +100,9 @@ fn execute_create_lotto(
         // We pay here the proxy contract with whatever the depositors sends. The depositor needs to check in advance the proxy prices.
         funds: info.funds, // Just pass on all funds we got
     };
+    nonce += 1;
+    config.lotto_nonce = nonce;
+    CONFIG.save(deps.storage, &config)?;
 
     // save config
     Ok(Response::new()
@@ -193,7 +193,7 @@ pub fn execute_receive(
 
     // Make sure the lotto nonce is valid
     let lotto = LOTTOS.load(deps.storage, lotto_nonce)?;
-    assert!(lotto.winner.is_some(), "Strange, there's already a winner");
+    assert!(lotto.winner.is_none(), "Strange, there's already a winner");
     let depositors = lotto.depositors;
 
     let winner = match nois::pick(randomness, 1, depositors.clone()).first() {
@@ -229,17 +229,17 @@ pub fn execute_receive(
     };
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
 
-    msgs.push(CosmosMsg::Stargate {
-        type_url: "/cosmos.distribution.v1beta1.MsgFundCommunityPool".to_string(),
-        value: encode_msg_fund_community_pool(
-            &Coin {
-                denom: denom.clone(),
-                amount: amount_community_pool,
-            },
-            &env.contract.address,
-        )
-        .into(),
-    });
+    // msgs.push(CosmosMsg::Stargate {
+    //     type_url: "/cosmos.distribution.v1beta1.MsgFundCommunityPool".to_string(),
+    //     value: encode_msg_fund_community_pool(
+    //         &Coin {
+    //             denom: denom.clone(),
+    //             amount: amount_community_pool,
+    //         },
+    //         &env.contract.address,
+    //     )
+    //     .into(),
+    // });
 
     Ok(Response::new().add_messages(msgs).add_attributes(vec![
         Attribute::new("action", "receive-randomness-and-send-prize"),
@@ -301,4 +301,104 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use cosmwasm_std::testing::{
+        mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
+    };
+    use cosmwasm_std::{
+        from_binary, from_slice, Empty, HexBinary, OwnedDeps, StdError, SubMsg, Timestamp,
+    };
+    use serde::Deserialize;
+
+    const CREATOR: &str = "creator";
+    const PROXY_ADDRESS: &str = "the proxy of choice";
+    const MANAGER: &str = "manager1";
+
+    fn instantiate_contract() -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {
+            manager: MANAGER.to_string(),
+            nois_proxy: PROXY_ADDRESS.to_string(),
+        };
+
+        let info = mock_info(CREATOR, &[]);
+        instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        deps
+    }
+
+    #[test]
+    fn proper_instantiation() {
+        let deps = instantiate_contract();
+        let env = mock_env();
+
+        // it worked, let's query the state
+        let res = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
+        let config: ConfigResponse = from_binary(&res).unwrap();
+        assert_eq!(MANAGER, config.manager.as_str());
+    }
+
+    #[test]
+    fn lotto_works() {
+        let mut deps = instantiate_contract();
+
+        let env = mock_env();
+
+        // manager starts a lotto instance
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            deposit: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(1),
+            },
+        };
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // someone deposits
+        let info = mock_info(MANAGER, &[Coin::new(1, "untrn".to_string())]);
+        let msg = ExecuteMsg::Deposit { lotto_id: 0 };
+        execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // Receive randomness
+        let msg = ExecuteMsg::NoisReceive {
+            callback: NoisCallback {
+                job_id: "lotto-0".to_string(),
+                published: Timestamp::from_seconds(1682086395),
+                randomness: HexBinary::from_hex(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa129",
+                )
+                .unwrap(),
+            },
+        };
+        let info = mock_info(PROXY_ADDRESS, &[]);
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                Attribute::new("action", "receive-randomness-and-send-randdrop"),
+                Attribute::new("address", "the proxy of choice"),
+                Attribute::new(
+                    "job_id",
+                    "randdrop-nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve"
+                ),
+                Attribute::new("participant", "nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve"),
+                Attribute::new("is_winner", true.to_string()),
+                Attribute::new("merkle_amount", 4500000.to_string()),
+                Attribute::new(
+                    "send_amount",
+                    "13500000ibc/717352A5277F3DE916E8FD6B87F4CA6A51F2FBA9CF04ABCFF2DF7202F8A8BC50"
+                        .to_string()
+                ),
+            ]
+        );
+        let expected = SubMsg::new(BankMsg::Send {
+            to_address: "nois1tfg9ptr84t9zshxxf5lkvrd6ej7gxjh75lztve".to_string(),
+            amount: vec![Coin {
+                amount: Uint128::new(13500000), // 4500000*3
+                denom: "ibc/717352A5277F3DE916E8FD6B87F4CA6A51F2FBA9CF04ABCFF2DF7202F8A8BC50"
+                    .to_string(),
+            }],
+        });
+        assert_eq!(res.messages, vec![expected]);
+    }
+}
