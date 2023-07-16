@@ -33,6 +33,10 @@ pub fn instantiate(
         .api
         .addr_validate(msg.manager.as_str())
         .map_err(|_| ContractError::InvalidAddress {})?;
+    let community_pool = deps
+        .api
+        .addr_validate(&msg.community_pool.as_str())
+        .map_err(|_| ContractError::InvalidAddress {})?;
 
     let proxy = deps
         .api
@@ -43,6 +47,7 @@ pub fn instantiate(
         manager: addr,
         lotto_nonce: 0,
         nois_proxy: proxy,
+        community_pool,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
@@ -218,6 +223,17 @@ pub fn execute_receive(
         .into(),
     );
 
+    msgs.push(
+        BankMsg::Send {
+            to_address: config.community_pool.into_string(),
+            amount: vec![Coin {
+                amount: amount_winner,
+                denom: denom.clone(),
+            }],
+        }
+        .into(),
+    );
+
     // Update Lotto Data
     let new_lotto = Lotto {
         nonce: lotto_nonce,
@@ -314,12 +330,14 @@ mod tests {
     const CREATOR: &str = "creator";
     const PROXY_ADDRESS: &str = "the proxy of choice";
     const MANAGER: &str = "manager1";
+    const COM_POOL: &str = "com_pool";
 
     fn instantiate_contract() -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
         let mut deps = mock_dependencies();
         let msg = InstantiateMsg {
             manager: MANAGER.to_string(),
             nois_proxy: PROXY_ADDRESS.to_string(),
+            community_pool: COM_POOL.to_string(),
         };
 
         let info = mock_info(CREATOR, &[]);
