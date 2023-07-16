@@ -22,7 +22,7 @@ module lotto {
     balance: U128,
     depositors: Set[Addr],
     expiration: Timestamp,
-    o_winner: Addr
+    op_winner: Addr
   }
 
   type SCS_ContractState = {

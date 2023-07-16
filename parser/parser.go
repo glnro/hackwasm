@@ -172,8 +172,8 @@ func writeFields(fields map[string]string) {
 	for val, entry := range fields {
 		fmt.Printf("fields :: %s: %s", val, entry)
 		field := fmt.Sprintf("\n	pub %s: %s,", val, formatType(entry))
-		if strings.Contains(val, "o_") {
-			fieldKey := strings.Trim(val, "o_")
+		if strings.Contains(val, "op_") {
+			fieldKey := strings.Trim(val, "op_")
 
 			field = fmt.Sprintf("\n	pub %s: Option<%s>,", fieldKey, formatType(entry))
 		}
@@ -190,6 +190,7 @@ func writeStateStorage(fields map[string]string) {
 		fmt.Printf("fields :: %s: %s", val, entry)
 		storageType := "Item"
 		entryType := strings.Trim(entry, ",")
+		entryType = strings.Trim(entryType, "SS_")
 		if strings.Contains(entry, "Map") {
 			storageType = "Map"
 			tokens := strings.Split(entry, ":")
