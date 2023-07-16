@@ -30,7 +30,7 @@ var (
 )
 
 func main() {
-	file, err := os.Open("../quint/lotto.qnt")
+	file, err := os.Open("./lotto_test.qnt")
 	if err != nil {
 		fmt.Errorf("Unable to open file")
 		return
@@ -194,7 +194,7 @@ func writeStateStorage(fields map[string]string) {
 			tokens := strings.Split(entry, ":")
 			mapKey := QUINT_RS[tokens[1]]
 			mapValue := strings.Title(strings.ToLower(tokens[2]))
-			entryType = fmt.Sprintf("%s:%s", mapKey, mapValue)
+			entryType = fmt.Sprintf("%s,%s", mapKey, mapValue)
 		}
 		storageKey := fmt.Sprintf("%s_KEY", strings.ToUpper(val))
 		storageKeyLine := fmt.Sprintf("\npub const %s_KEY: &str = \"%s\";", strings.ToUpper(val), strings.ToLower(val))

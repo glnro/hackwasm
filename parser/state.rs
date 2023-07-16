@@ -13,20 +13,20 @@ pub struct Config {
 
 #[cw_serde]
 pub struct Lotto {
-	pub nonce: u32,
-	pub deposit: Coin,
 	pub balance: Uint128,
 	pub depositors: Vec<Addr>,
 	pub expiration: Timestamp,
 	pub winner: Option<Addr>,
+	pub nonce: u32,
+	pub deposit: Coin,
 }
 
-pub const CONFIG_KEY: &str = "config";
 pub const NOIS_PROXY_KEY: &str = "nois_proxy";
 pub const MIN_DEP_KEY: &str = "min_dep";
 pub const LOTTOS_KEY: &str = "lottos";
+pub const CONFIG_KEY: &str = "config";
 
-pub const CONFIG: Item<Config> = Item::new(CONFIG_KEY);
 pub const NOIS_PROXY: Item<Addr> = Item::new(NOIS_PROXY_KEY);
 pub const MIN_DEP: Item<Coin> = Item::new(MIN_DEP_KEY);
-pub const LOTTOS: Map<u32:Lotto> = Map::new(LOTTOS_KEY);
+pub const LOTTOS: Map<u32,Lotto> = Map::new(LOTTOS_KEY);
+pub const CONFIG: Item<Config> = Item::new(CONFIG_KEY);
