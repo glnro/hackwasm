@@ -13,7 +13,7 @@ use nois::{NoisCallback, ProxyExecuteMsg};
 use crate::error::ContractError;
 use crate::state::{Config, Lotto, CONFIG, LOTTOS};
 
-const GAME_DURATION: u64 = 300;
+const GAME_DURATION: u64 = 120;
 
 /*
 // version info for migration info
@@ -31,7 +31,7 @@ pub fn instantiate(
     // validate address is correct
     let addr = deps
         .api
-        .addr_validate(&info.sender.as_ref())
+        .addr_validate(info.sender.as_ref())
         .map_err(|_| ContractError::InvalidAddress {})?;
 
     let proxy = deps
@@ -98,7 +98,7 @@ fn execute_create_lotto(
         // The job id is needed to know what randomness we are referring to upon reception in the callback.
         msg: to_binary(&ProxyExecuteMsg::GetRandomnessAfter {
             after: expiration,
-            job_id: "lotto".to_string(),
+            job_id: "lotto-".to_string() + nonce.to_string().as_str(),
         })?,
         // We pay here the proxy contract with whatever the depositors sends. The depositor needs to check in advance the proxy prices.
         funds: info.funds, // Just pass on all funds we got
@@ -143,7 +143,6 @@ fn execute_deposit_lotto(
     }
     // Increment total deposit
     let balance: Coin = info
-        .clone()
         .funds
         .iter()
         .filter(|coin| coin.denom == deposit.denom)
@@ -194,10 +193,7 @@ pub fn execute_receive(
 
     // Make sure the lotto nonce is valid
     let lotto = LOTTOS.load(deps.storage, lotto_nonce)?;
-    assert!(
-        lotto.clone().winner.clone().is_some(),
-        "Strange, there's already a winner"
-    );
+    assert!(lotto.winner.is_some(), "Strange, there's already a winner");
     let depositors = lotto.depositors;
 
     let winner = match nois::pick(randomness, 1, depositors.clone()).first() {
@@ -228,7 +224,7 @@ pub fn execute_receive(
         deposit: lotto.deposit,
         balance: lotto.balance,
         expiration: lotto.expiration,
-        depositors: depositors,
+        depositors,
         winner: Some(winner.clone()),
     };
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
@@ -283,10 +279,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
 
 fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
     let lotto = LOTTOS.load(deps.storage, nonce)?;
-    let winner = match lotto.winner {
-        Some(wn) => Some(wn.to_string()),
-        None => None,
-    };
+    let winner = lotto.winner.map(|wn| wn.to_string());
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
