@@ -28,3 +28,8 @@ lottos: Map<> //lotto id to Lotto
 **Execution**
 
 **Query**
+
+<hr>
+
+Creating the IBC channel for Nois and instantiate the Nois proxy on Neutron
+[link](https://docs.nois.network/integrate_nois_to_your_chain.html)

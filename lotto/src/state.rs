@@ -1,6 +1,5 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Coin, Timestamp, Uint128};
-
 use cw_storage_plus::{Item, Map};
 
 // Initialize a contract with the admin address and lotto id generator nonce
@@ -22,10 +21,7 @@ pub struct Lotto {
 }
 
 pub const CONFIG_KEY: &str = "config";
-pub const LOTTO_KEY: &str = "lottos";
-pub const NOIS_KEY: &str = "nois_proxy";
+pub const LOTTOS_KEY: &str = "lottos";
 
 pub const CONFIG: Item<Config> = Item::new(CONFIG_KEY);
-pub const LOTTOS: Map<u32, Lotto> = Map::new(LOTTO_KEY);
-pub const NOIS_PROXY: Item<Addr> = Item::new(NOIS_KEY);
-pub const MIN_DEP: Item<Coin> = Item::new("min_dep");
+pub const LOTTOS: Map<u32, Lotto> = Map::new(LOTTOS_KEY);
