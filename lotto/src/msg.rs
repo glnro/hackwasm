@@ -6,6 +6,7 @@ use nois::NoisCallback;
 #[cw_serde]
 pub struct InstantiateMsg {
     pub manager: String,
+    pub community_pool: String,
     pub nois_proxy: String,
 }
 
