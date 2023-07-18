@@ -13,7 +13,7 @@ pub struct Config {
 #[cw_serde]
 pub struct Lotto {
     // The price of one ticket for the lotto
-    pub deposit: Coin,
+    pub ticket_price: Coin,
     // The cumulated amount of funds that the lotto has generated from depositors
     pub balance: Uint128,
     // The list of addresses that have deposited (i.e bought a lotto ticket)

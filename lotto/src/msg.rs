@@ -13,7 +13,7 @@ pub struct InstantiateMsg {
 #[cw_serde]
 pub enum ExecuteMsg {
     CreateLotto {
-        deposit: Coin, // Can already book the safe randomness after this timestamp (faster)
+        ticket_price: Coin, // Can already book the safe randomness after this timestamp (faster)
         duration_seconds: u64,
     },
     Deposit {

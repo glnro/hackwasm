@@ -66,9 +66,9 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::CreateLotto {
-            deposit,
+            ticket_price,
             duration_seconds,
-        } => execute_create_lotto(deps, env, info, deposit, duration_seconds),
+        } => execute_create_lotto(deps, env, info, ticket_price, duration_seconds),
         ExecuteMsg::Deposit { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
         ExecuteMsg::WithdrawAll { address, denom } => {
@@ -81,7 +81,7 @@ fn execute_create_lotto(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    deposit: Coin,
+    ticket_price: Coin,
     duration_seconds: u64,
 ) -> Result<Response, ContractError> {
     // validate Timestamp
@@ -92,7 +92,7 @@ fn execute_create_lotto(
 
     let lotto = Lotto {
         nonce,
-        deposit,
+        ticket_price,
         balance: Uint128::new(0),
         depositors: vec![],
         expiration,
@@ -148,10 +148,10 @@ fn execute_deposit_lotto(
         return Err(ContractError::LottoNotFound {});
     }
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
-    let deposit = lotto.clone().deposit;
+    let ticket_price = lotto.clone().ticket_price;
 
     // Not sure the best way to go about validating the coin
-    validate_payment(&deposit, info.funds.as_slice())?;
+    validate_payment(&ticket_price, info.funds.as_slice())?;
 
     // Check if lotto is active
     if env.block.time >= lotto.expiration {
@@ -161,7 +161,7 @@ fn execute_deposit_lotto(
     let balance: Coin = info
         .funds
         .iter()
-        .filter(|coin| coin.denom == deposit.denom)
+        .filter(|coin| coin.denom == ticket_price.denom)
         .last()
         .unwrap()
         .clone();
@@ -226,7 +226,7 @@ pub fn execute_receive(
     let prize_amount = lotto.balance - (amount_protocol + amount_creator);
     let amount_winner = prize_amount.mul_floor((50u128, 100)); // 50%
     let amount_community_pool = prize_amount.mul_floor((50u128, 100)); // 50%
-    let denom = lotto.deposit.clone().denom;
+    let denom = lotto.ticket_price.clone().denom;
 
     let msgs = vec![
         // Winner
@@ -258,7 +258,7 @@ pub fn execute_receive(
     // Update Lotto Data
     let new_lotto = Lotto {
         nonce: lotto_nonce,
-        deposit: lotto.deposit,
+        ticket_price: lotto.ticket_price,
         balance: lotto.balance,
         expiration: lotto.expiration,
         depositors,
@@ -301,6 +301,8 @@ fn execute_withdraw_all(
     to_address: String,
     denom: String,
 ) -> Result<Response, ContractError> {
+    //TODO CRITICAL! Make sure not to withdraw current deposits that have not been settled
+
     let config = CONFIG.load(deps.storage)?;
     // check the calling address is the authorised address
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
@@ -349,7 +351,7 @@ fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
-        deposit: lotto.deposit,
+        deposit: lotto.ticket_price,
         balance: lotto.balance,
         depositors: lotto.depositors.iter().map(|dep| dep.to_string()).collect(),
         winner,
@@ -413,7 +415,7 @@ mod tests {
         // manager starts a lotto instance
         let info = mock_info(CREATOR, &[]);
         let msg = ExecuteMsg::CreateLotto {
-            deposit: Coin {
+            ticket_price: Coin {
                 denom: "untrn".to_string(),
                 amount: Uint128::new(100_000_000),
             },
