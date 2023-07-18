@@ -14,6 +14,7 @@ pub struct InstantiateMsg {
 pub enum ExecuteMsg {
     CreateLotto {
         deposit: Coin, // Can already book the safe randomness after this timestamp (faster)
+        duration_seconds: u64,
     },
     Deposit {
         lotto_id: u32,
@@ -22,6 +23,11 @@ pub enum ExecuteMsg {
     //callback should only be allowed to be called by the proxy contract
     NoisReceive {
         callback: NoisCallback,
+    },
+    // Withdraw all available balance to the withdrawal address for a specific denom
+    WithdrawAll {
+        address: String,
+        denom: String,
     },
 }
 
@@ -51,6 +57,7 @@ pub struct LottoResponse {
     pub depositors: Vec<String>,
     pub expiration: Timestamp, // how to set expiration
     pub winner: Option<String>,
+    pub creator: String,
 }
 
 #[cw_serde]

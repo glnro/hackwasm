@@ -12,7 +12,8 @@ use nois::{NoisCallback, ProxyExecuteMsg};
 use crate::error::ContractError;
 use crate::state::{Config, Lotto, CONFIG, LOTTOS};
 
-const GAME_DURATION: u64 = 90;
+const PROTOCOL_COMMISSION_PERCENT: u32 = 5;
+const MANAGER_COMMISSIION_PERCENT: u32 = 10;
 
 /*
 // version info for migration info
@@ -64,9 +65,15 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::CreateLotto { deposit } => execute_create_lotto(deps, env, info, deposit),
+        ExecuteMsg::CreateLotto {
+            deposit,
+            duration_seconds,
+        } => execute_create_lotto(deps, env, info, deposit, duration_seconds),
         ExecuteMsg::Deposit { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
+        ExecuteMsg::WithdrawAll { address, denom } => {
+            execute_withdraw_all(deps, env, info, address, denom)
+        }
     }
 }
 
@@ -75,12 +82,13 @@ fn execute_create_lotto(
     env: Env,
     info: MessageInfo,
     deposit: Coin,
+    duration_seconds: u64,
 ) -> Result<Response, ContractError> {
     // validate Timestamp
     let mut config = CONFIG.load(deps.storage)?;
     let mut nonce = config.lotto_nonce;
 
-    let expiration = env.block.time.plus_seconds(GAME_DURATION);
+    let expiration = env.block.time.plus_seconds(duration_seconds);
 
     let lotto = Lotto {
         nonce,
@@ -89,6 +97,7 @@ fn execute_create_lotto(
         depositors: vec![],
         expiration,
         winner: None,
+        creator: info.sender,
     };
 
     LOTTOS.save(deps.storage, nonce, &lotto)?;
@@ -135,6 +144,9 @@ fn execute_deposit_lotto(
     info: MessageInfo,
     lotto_id: u32,
 ) -> Result<Response, ContractError> {
+    if !LOTTOS.has(deps.storage, lotto_id) {
+        return Err(ContractError::LottoNotFound {});
+    }
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
     let deposit = lotto.clone().deposit;
 
@@ -143,7 +155,7 @@ fn execute_deposit_lotto(
 
     // Check if lotto is active
     if env.block.time >= lotto.expiration {
-        return Err(ContractError::InvalidAddress {});
+        return Err(ContractError::LottoDepositStageEnded {});
     }
     // Increment total deposit
     let balance: Coin = info
@@ -205,11 +217,19 @@ pub fn execute_receive(
         None => return Err(ContractError::NoDepositors {}),
     };
 
-    let amount_winner = lotto.balance.mul_floor((50u128, 100)); // 50%
-    let amount_community_pool = lotto.balance.mul_floor((50u128, 100)); // 50%
+    let amount_creator = lotto
+        .balance
+        .mul_floor((MANAGER_COMMISSIION_PERCENT as u128, 100));
+    let amount_protocol = lotto
+        .balance
+        .mul_floor((PROTOCOL_COMMISSION_PERCENT as u128, 100));
+    let prize_amount = lotto.balance - (amount_protocol + amount_creator);
+    let amount_winner = prize_amount.mul_floor((50u128, 100)); // 50%
+    let amount_community_pool = prize_amount.mul_floor((50u128, 100)); // 50%
     let denom = lotto.deposit.clone().denom;
 
     let msgs = vec![
+        // Winner
         BankMsg::Send {
             to_address: winner.clone().into_string(),
             amount: vec![Coin {
@@ -217,10 +237,19 @@ pub fn execute_receive(
                 denom: denom.clone(),
             }],
         },
+        // Community Pool
         BankMsg::Send {
             to_address: config.community_pool.into_string(),
             amount: vec![Coin {
                 amount: amount_community_pool,
+                denom: denom.clone(),
+            }],
+        },
+        // creator
+        BankMsg::Send {
+            to_address: lotto.creator.clone().into_string(),
+            amount: vec![Coin {
+                amount: amount_creator,
                 denom: denom.clone(),
             }],
         },
@@ -234,6 +263,7 @@ pub fn execute_receive(
         expiration: lotto.expiration,
         depositors,
         winner: Some(winner.clone()),
+        creator: lotto.creator,
     };
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
 
@@ -262,6 +292,32 @@ pub fn execute_receive(
             .to_string(),
         ), // actual send amount
     ]))
+}
+
+fn execute_withdraw_all(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    to_address: String,
+    denom: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    // check the calling address is the authorised address
+    ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
+
+    let amount = deps
+        .querier
+        .query_balance(env.contract.address.clone(), denom.clone())?;
+    let msg = BankMsg::Send {
+        to_address,
+        amount: vec![amount.clone()],
+    };
+
+    let res = Response::new()
+        .add_message(msg)
+        .add_attribute("action", "withdraw_all")
+        .add_attribute("amount", amount.to_string());
+    Ok(res)
 }
 
 // For chains that have a community pool module, you can use this function.
@@ -299,6 +355,7 @@ fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
         winner,
         is_expired,
         expiration: lotto.expiration,
+        creator: lotto.creator.to_string(),
     })
 }
 
@@ -316,11 +373,12 @@ mod tests {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{from_binary, Empty, HexBinary, OwnedDeps, Timestamp};
+    use cosmwasm_std::{from_binary, Empty, HexBinary, OwnedDeps, SubMsg, Timestamp};
 
-    const CREATOR: &str = "creator";
+    const CREATOR: &str = "creator1";
+    const DEPOSITOR: &str = "depositor1";
     const PROXY_ADDRESS: &str = "the proxy of choice";
-    const MANAGER: &str = "manager1";
+    const MANAGER: &str = "manager";
     const COM_POOL: &str = "com_pool";
 
     fn instantiate_contract() -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
@@ -350,21 +408,34 @@ mod tests {
     #[test]
     fn lotto_works() {
         let mut deps = instantiate_contract();
+        let env = mock_env();
 
         // manager starts a lotto instance
-        let info = mock_info(MANAGER, &[]);
+        let info = mock_info(CREATOR, &[]);
         let msg = ExecuteMsg::CreateLotto {
             deposit: Coin {
                 denom: "untrn".to_string(),
-                amount: Uint128::new(1),
+                amount: Uint128::new(100_000_000),
             },
+            duration_seconds: 90,
         };
-        execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
-        // someone deposits
-        let info = mock_info(MANAGER, &[Coin::new(1, "untrn".to_string())]);
+        // someone deposits wrong amount
+        let info = mock_info(DEPOSITOR, &[Coin::new(50_000_000, "untrn".to_string())]);
         let msg = ExecuteMsg::Deposit { lotto_id: 0 };
-        execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::InvalidPayment {});
+        // someone deposits for inexistant lotto
+        let info = mock_info(DEPOSITOR, &[Coin::new(50_000_000, "untrn".to_string())]);
+        let msg = ExecuteMsg::Deposit { lotto_id: 1 };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::LottoNotFound {});
+
+        // someone deposits correctly
+        let info = mock_info(DEPOSITOR, &[Coin::new(100_000_000, "untrn".to_string())]);
+        let msg = ExecuteMsg::Deposit { lotto_id: 0 };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Receive randomness
         let msg = ExecuteMsg::NoisReceive {
@@ -378,15 +449,71 @@ mod tests {
             },
         };
         let info = mock_info(PROXY_ADDRESS, &[]);
-        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
         assert_eq!(
             res.attributes,
             vec![
                 Attribute::new("action", "receive-randomness-and-send-prize"),
-                Attribute::new("winner", "manager1"),
+                Attribute::new("winner", "depositor1"),
                 Attribute::new("job_id", "lotto-0"),
-                Attribute::new("winner_send_amount", "0untrn"),
+                Attribute::new("winner_send_amount", "42500000untrn"),
             ]
         );
+        let expected = vec![
+            SubMsg::new(BankMsg::Send {
+                to_address: "depositor1".to_string(),
+                amount: vec![Coin {
+                    amount: Uint128::new(42500000),
+                    denom: "untrn".to_string(),
+                }],
+            }),
+            SubMsg::new(BankMsg::Send {
+                to_address: "com_pool".to_string(),
+                amount: vec![Coin {
+                    amount: Uint128::new(42500000),
+                    denom: "untrn".to_string(),
+                }],
+            }),
+            SubMsg::new(BankMsg::Send {
+                to_address: "creator1".to_string(),
+                amount: vec![Coin {
+                    amount: Uint128::new(10_000_000),
+                    denom: "untrn".to_string(),
+                }],
+            }),
+        ];
+        assert_eq!(res.messages, expected);
+
+        // someone tries to withdraw smart contract funds
+        let info = mock_info("someone", &[]);
+        let msg = ExecuteMsg::WithdrawAll {
+            address: "someone".to_string(),
+            denom: "untrn".to_string(),
+        };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // manager tries to withdraw smart contract funds
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::WithdrawAll {
+            address: "manager_second_address".to_string(),
+            denom: "untrn".to_string(),
+        };
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                Attribute::new("action", "withdraw_all"),
+                Attribute::new("amount", "withdraw_all"),
+            ]
+        );
+        let expected = vec![SubMsg::new(BankMsg::Send {
+            to_address: "manager_second_address".to_string(),
+            amount: vec![Coin {
+                amount: Uint128::new(42500000),
+                denom: "untrn".to_string(),
+            }],
+        })];
+        assert_eq!(res.messages, expected);
     }
 }
