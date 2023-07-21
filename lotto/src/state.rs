@@ -5,9 +5,11 @@ use cw_storage_plus::{Item, Map};
 #[cw_serde]
 pub struct Config {
     pub nois_proxy: Addr,
+    // Only the manager is able to withdraw funds from the contract
     pub manager: Addr,
     pub lotto_nonce: u32,
     pub community_pool: Addr,
+    // TODO Add comission rates
 }
 
 #[cw_serde]
@@ -21,7 +23,7 @@ pub struct Lotto {
     // The timestamp when the lotto round finishes
     // After this timestamp no deposits are accepted
     pub expiration: Timestamp,
-    // The address of the lotto winner
+    // The address of the lotto winners
     pub winners: Option<Vec<Addr>>,
     // This is the lotto id
     pub nonce: u32,

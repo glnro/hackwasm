@@ -19,6 +19,10 @@ pub enum ExecuteMsg {
         number_of_winners: u16,
         // funded_addresses: Vec<(String, Uint128)>,
     },
+    // TODO Kais, Update Config
+    UpdateConfig {
+        nois_proxy: Option<String>,
+    },
     BuyTicket {
         lotto_id: u32,
     },
