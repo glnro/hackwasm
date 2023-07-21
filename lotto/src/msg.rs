@@ -17,7 +17,7 @@ pub enum ExecuteMsg {
         ticket_price: Coin,
         duration_seconds: u64,
         number_of_winners: u16,
-        funded_addresses: Vec<(String, Uint128)>,
+        // funded_addresses: Vec<(String, Uint128)>,
     },
     BuyTicket {
         lotto_id: u32,
@@ -42,6 +42,8 @@ pub enum QueryMsg {
     Config {},
     #[returns(LottoResponse)]
     Lotto { lotto_nonce: u32 },
+    #[returns(LottosResponse)]
+    Lottos { creator: String },
 }
 
 // GetLotto response, can be null or Lotto
@@ -61,6 +63,11 @@ pub struct LottoResponse {
     pub expiration: Timestamp, // how to set expiration
     pub winners: Option<Vec<String>>,
     pub creator: String,
+}
+#[cw_serde]
+pub struct LottosResponse {
+    /// True if expired, False if not expired
+    pub lottos: Vec<Lotto>,
 }
 
 #[cw_serde]

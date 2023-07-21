@@ -13,7 +13,7 @@ use crate::error::ContractError;
 use crate::state::{Config, Lotto, CONFIG, LOTTOS};
 
 const PROTOCOL_COMMISSION_PERCENT: u32 = 5;
-const MANAGER_COMMISSIION_PERCENT: u32 = 10;
+const CREATOR_COMMISSIION_PERCENT: u32 = 10;
 
 /*
 // version info for migration info
@@ -250,7 +250,7 @@ pub fn execute_receive(
     let amount_protocol = lotto
         .balance
         .mul_floor((PROTOCOL_COMMISSION_PERCENT as u128, 100));
-    let amount_community_pool = lotto.balance.mul_floor((10u128, 100));
+    let amount_community_pool = lotto.balance.mul_floor((lotto. as u128, 100));
     let prize_amount = lotto.balance - (amount_protocol + amount_creator + amount_community_pool);
     let amount_winner = prize_amount.multiply_ratio(
         Uint128::new(1),
@@ -337,7 +337,8 @@ fn execute_withdraw_all(
     to_address: String,
     denom: String,
 ) -> Result<Response, ContractError> {
-    //TODO CRITICAL! Make sure not to withdraw current deposits that have not been settled
+    // TODO CRITICAL! Make sure not to withdraw current deposits that have not been settled
+    // Keep a state of the manager revenue
 
     let config = CONFIG.load(deps.storage)?;
     // check the calling address is the authorised address
