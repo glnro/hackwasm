@@ -12,16 +12,29 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
+    // Anyone can create a new lotto. This will also book a random beacon at the end of the round
     CreateLotto {
-        deposit: Coin, // Can already book the safe randomness after this timestamp (faster)
+        ticket_price: Coin,
+        duration_seconds: u64,
+        number_of_winners: u16,
+        // funded_addresses: Vec<(String, Uint128)>,
     },
-    Deposit {
+    // TODO Kais, Update Config
+    UpdateConfig {
+        nois_proxy: Option<String>,
+    },
+    BuyTicket {
         lotto_id: u32,
     },
     //callback contains the randomness from drand (HexBinary) and job_id
     //callback should only be allowed to be called by the proxy contract
     NoisReceive {
         callback: NoisCallback,
+    },
+    // Withdraw all available balance to the withdrawal address for a specific denom
+    WithdrawAll {
+        address: String,
+        denom: String,
     },
 }
 
@@ -33,6 +46,8 @@ pub enum QueryMsg {
     Config {},
     #[returns(LottoResponse)]
     Lotto { lotto_nonce: u32 },
+    #[returns(LottosResponse)]
+    Lottos { creator: String },
 }
 
 // GetLotto response, can be null or Lotto
@@ -50,7 +65,13 @@ pub struct LottoResponse {
     pub balance: Uint128,
     pub depositors: Vec<String>,
     pub expiration: Timestamp, // how to set expiration
-    pub winner: Option<String>,
+    pub winners: Option<Vec<String>>,
+    pub creator: String,
+}
+#[cw_serde]
+pub struct LottosResponse {
+    /// True if expired, False if not expired
+    pub lottos: Vec<Lotto>,
 }
 
 #[cw_serde]
