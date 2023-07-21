@@ -12,11 +12,14 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
+    // Anyone can create a new lotto. This will also book a random beacon at the end of the round
     CreateLotto {
-        ticket_price: Coin, // Can already book the safe randomness after this timestamp (faster)
+        ticket_price: Coin,
         duration_seconds: u64,
+        number_of_winners: u16,
+        funded_addresses: Vec<(String, Uint128)>,
     },
-    Deposit {
+    BuyTicket {
         lotto_id: u32,
     },
     //callback contains the randomness from drand (HexBinary) and job_id
@@ -56,7 +59,7 @@ pub struct LottoResponse {
     pub balance: Uint128,
     pub depositors: Vec<String>,
     pub expiration: Timestamp, // how to set expiration
-    pub winner: Option<String>,
+    pub winners: Option<Vec<String>>,
     pub creator: String,
 }
 

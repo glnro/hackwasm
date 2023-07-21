@@ -68,8 +68,18 @@ pub fn execute(
         ExecuteMsg::CreateLotto {
             ticket_price,
             duration_seconds,
-        } => execute_create_lotto(deps, env, info, ticket_price, duration_seconds),
-        ExecuteMsg::Deposit { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
+            number_of_winners,
+            funded_addresses,
+        } => execute_create_lotto(
+            deps,
+            env,
+            info,
+            ticket_price,
+            duration_seconds,
+            number_of_winners as usize,
+            funded_addresses,
+        ),
+        ExecuteMsg::BuyTicket { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
         ExecuteMsg::WithdrawAll { address, denom } => {
             execute_withdraw_all(deps, env, info, address, denom)
@@ -83,6 +93,8 @@ fn execute_create_lotto(
     info: MessageInfo,
     ticket_price: Coin,
     duration_seconds: u64,
+    number_of_winners: usize,
+    funded_addresses: Vec<(String, Uint128)>,
 ) -> Result<Response, ContractError> {
     // validate Timestamp
     let mut config = CONFIG.load(deps.storage)?;
@@ -90,14 +102,28 @@ fn execute_create_lotto(
 
     let expiration = env.block.time.plus_seconds(duration_seconds);
 
+    let mut funded_addresses_addr = vec![];
+
+    for address in funded_addresses {
+        let funded_addr = (
+            deps.api
+                .addr_validate(address.0.as_str())
+                .map_err(|_| ContractError::InvalidAddress {})?,
+            address.1,
+        );
+        funded_addresses_addr.push(funded_addr);
+    }
+
     let lotto = Lotto {
         nonce,
         ticket_price,
         balance: Uint128::new(0),
-        depositors: vec![],
+        participants: vec![],
         expiration,
-        winner: None,
+        winners: None,
         creator: info.sender,
+        number_of_winners,
+        funded_addresses: funded_addresses_addr,
     };
 
     LOTTOS.save(deps.storage, nonce, &lotto)?;
@@ -167,14 +193,14 @@ fn execute_deposit_lotto(
         .clone();
 
     lotto.balance += balance.amount;
-    // Add depositor address
-    lotto.depositors.push(info.clone().sender);
+    // Add participant address
+    lotto.participants.push(info.clone().sender);
 
     // Save the state
     LOTTOS.save(deps.storage, lotto_id, &lotto)?;
 
     Ok(Response::new()
-        .add_attribute("action", "deposit")
+        .add_attribute("action", "participate")
         .add_attribute("sender", info.sender.as_ref())
         .add_attribute("new_balance", lotto.balance.to_string()))
 }
@@ -209,13 +235,14 @@ pub fn execute_receive(
 
     // Make sure the lotto nonce is valid
     let lotto = LOTTOS.load(deps.storage, lotto_nonce)?;
-    assert!(lotto.winner.is_none(), "Strange, there's already a winner");
-    let depositors = lotto.depositors;
+    assert!(lotto.winners.is_none(), "Strange, there's already winners");
+    let participants = lotto.participants;
 
-    let winner = match nois::pick(randomness, 1, depositors.clone()).first() {
-        Some(wn) => wn.clone(),
-        None => return Err(ContractError::NoDepositors {}),
-    };
+    let winners = nois::pick(randomness, lotto.number_of_winners, participants.clone());
+
+    if winners.is_empty() {
+        return Err(ContractError::NoDepositors {});
+    }
 
     let amount_creator = lotto
         .balance
@@ -223,20 +250,16 @@ pub fn execute_receive(
     let amount_protocol = lotto
         .balance
         .mul_floor((PROTOCOL_COMMISSION_PERCENT as u128, 100));
-    let prize_amount = lotto.balance - (amount_protocol + amount_creator);
-    let amount_winner = prize_amount.mul_floor((50u128, 100)); // 50%
-    let amount_community_pool = prize_amount.mul_floor((50u128, 100)); // 50%
+    let amount_community_pool = lotto.balance.mul_floor((10u128, 100));
+    let prize_amount = lotto.balance - (amount_protocol + amount_creator + amount_community_pool);
+    let amount_winner = prize_amount.multiply_ratio(
+        Uint128::new(1),
+        Uint128::new(lotto.number_of_winners as u128),
+    );
+
     let denom = lotto.ticket_price.clone().denom;
 
-    let msgs = vec![
-        // Winner
-        BankMsg::Send {
-            to_address: winner.clone().into_string(),
-            amount: vec![Coin {
-                amount: amount_winner,
-                denom: denom.clone(),
-            }],
-        },
+    let mut msgs = vec![
         // Community Pool
         BankMsg::Send {
             to_address: config.community_pool.into_string(),
@@ -254,6 +277,18 @@ pub fn execute_receive(
             }],
         },
     ];
+    for winner in winners.clone() {
+        msgs.push(
+            // Winner
+            BankMsg::Send {
+                to_address: winner.clone().into_string(),
+                amount: vec![Coin {
+                    amount: amount_winner,
+                    denom: denom.clone(),
+                }],
+            },
+        );
+    }
 
     // Update Lotto Data
     let new_lotto = Lotto {
@@ -261,9 +296,11 @@ pub fn execute_receive(
         ticket_price: lotto.ticket_price,
         balance: lotto.balance,
         expiration: lotto.expiration,
-        depositors,
-        winner: Some(winner.clone()),
+        participants,
+        winners: Some(winners.clone()),
         creator: lotto.creator,
+        number_of_winners: lotto.number_of_winners,
+        funded_addresses: lotto.funded_addresses,
     };
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
 
@@ -281,7 +318,6 @@ pub fn execute_receive(
 
     Ok(Response::new().add_messages(msgs).add_attributes(vec![
         Attribute::new("action", "receive-randomness-and-send-prize"),
-        Attribute::new("winner", winner.to_string()),
         Attribute::new("job_id", job_id),
         Attribute::new(
             "winner_send_amount",
@@ -347,14 +383,21 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
 
 fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
     let lotto = LOTTOS.load(deps.storage, nonce)?;
-    let winner = lotto.winner.map(|wn| wn.to_string());
+    let winners = match lotto.winners {
+        Some(winners) => Some(winners.iter().map(|wn| wn.clone().into_string()).collect()),
+        None => None,
+    };
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
         deposit: lotto.ticket_price,
         balance: lotto.balance,
-        depositors: lotto.depositors.iter().map(|dep| dep.to_string()).collect(),
-        winner,
+        depositors: lotto
+            .participants
+            .iter()
+            .map(|dep| dep.to_string())
+            .collect(),
+        winners,
         is_expired,
         expiration: lotto.expiration,
         creator: lotto.creator.to_string(),
@@ -378,7 +421,6 @@ mod tests {
     use cosmwasm_std::{from_binary, Empty, HexBinary, OwnedDeps, SubMsg, Timestamp};
 
     const CREATOR: &str = "creator1";
-    const DEPOSITOR: &str = "depositor1";
     const PROXY_ADDRESS: &str = "the proxy of choice";
     const MANAGER: &str = "manager";
     const COM_POOL: &str = "com_pool";
@@ -420,23 +462,54 @@ mod tests {
                 amount: Uint128::new(100_000_000),
             },
             duration_seconds: 90,
+            number_of_winners: 2,
+            funded_addresses: vec![(COM_POOL.to_string(), Uint128::new(1))],
         };
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // someone deposits wrong amount
-        let info = mock_info(DEPOSITOR, &[Coin::new(50_000_000, "untrn".to_string())]);
-        let msg = ExecuteMsg::Deposit { lotto_id: 0 };
+        let info = mock_info(
+            "participant-1",
+            &[Coin::new(50_000_000, "untrn".to_string())],
+        );
+        let msg = ExecuteMsg::BuyTicket { lotto_id: 0 };
         let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::InvalidPayment {});
         // someone deposits for inexistant lotto
-        let info = mock_info(DEPOSITOR, &[Coin::new(50_000_000, "untrn".to_string())]);
-        let msg = ExecuteMsg::Deposit { lotto_id: 1 };
+        let info = mock_info(
+            "participant-1",
+            &[Coin::new(50_000_000, "untrn".to_string())],
+        );
+        let msg = ExecuteMsg::BuyTicket { lotto_id: 1 };
         let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::LottoNotFound {});
 
         // someone deposits correctly
-        let info = mock_info(DEPOSITOR, &[Coin::new(100_000_000, "untrn".to_string())]);
-        let msg = ExecuteMsg::Deposit { lotto_id: 0 };
+        let msg = ExecuteMsg::BuyTicket { lotto_id: 0 };
+        let info = mock_info(
+            "participant-1",
+            &[Coin::new(100_000_000, "untrn".to_string())],
+        );
+        execute(deps.as_mut(), env.clone(), info, msg.clone()).unwrap();
+        let info = mock_info(
+            "participant-2",
+            &[Coin::new(100_000_000, "untrn".to_string())],
+        );
+        execute(deps.as_mut(), env.clone(), info, msg.clone()).unwrap();
+        let info = mock_info(
+            "participant-3",
+            &[Coin::new(100_000_000, "untrn".to_string())],
+        );
+        execute(deps.as_mut(), env.clone(), info, msg.clone()).unwrap();
+        let info = mock_info(
+            "participant-4",
+            &[Coin::new(100_000_000, "untrn".to_string())],
+        );
+        execute(deps.as_mut(), env.clone(), info, msg.clone()).unwrap();
+        let info = mock_info(
+            "participant-5",
+            &[Coin::new(100_000_000, "untrn".to_string())],
+        );
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Receive randomness
@@ -456,7 +529,6 @@ mod tests {
             res.attributes,
             vec![
                 Attribute::new("action", "receive-randomness-and-send-prize"),
-                Attribute::new("winner", "depositor1"),
                 Attribute::new("job_id", "lotto-0"),
                 Attribute::new("winner_send_amount", "42500000untrn"),
             ]
