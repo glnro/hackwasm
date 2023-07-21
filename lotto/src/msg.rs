@@ -8,6 +8,10 @@ pub struct InstantiateMsg {
     pub manager: String,
     pub community_pool: String,
     pub nois_proxy: String,
+    // commission that will stay in the contract
+    pub protocol_commission_percent: u32,
+    // commission that will got to the creator of the lotto
+    pub creator_commission_percent: u32,
 }
 
 #[cw_serde]
@@ -17,14 +21,19 @@ pub enum ExecuteMsg {
         ticket_price: Coin,
         duration_seconds: u64,
         number_of_winners: u16,
-        // funded_addresses: Vec<(String, Uint128)>,
+        community_pool_percentage: u32,
     },
     // TODO Kais, Update Config
-    UpdateConfig {
+    SetConfig {
         nois_proxy: Option<String>,
+        manager: Option<String>,
+        lotto_nonce: Option<u64>,
+        community_pool: Option<String>,
+        protocol_commission_percent: Option<u32>,
+        creator_commission_percent: Option<u32>,
     },
     BuyTicket {
-        lotto_id: u32,
+        lotto_id: u64,
     },
     //callback contains the randomness from drand (HexBinary) and job_id
     //callback should only be allowed to be called by the proxy contract
@@ -45,9 +54,26 @@ pub enum QueryMsg {
     #[returns(ConfigResponse)]
     Config {},
     #[returns(LottoResponse)]
-    Lotto { lotto_nonce: u32 },
+    Lotto { lotto_nonce: u64 },
+    /// Gets lottos in descending order (new to old)
     #[returns(LottosResponse)]
-    Lottos { creator: String },
+    LottosDesc {
+        creator: String,
+        // If set only nonces smaller than this value are returned
+        start_after: Option<u64>,
+        /// The max number of entries returned. If you set this too high, your query runs out of gas.
+        /// When unset, an implementation defined default will be used.
+        limit: Option<u64>,
+    },
+    #[returns(LottosResponse)]
+    LottosAsc {
+        creator: String,
+        // If set only nonces greater than this value are returned
+        start_after: Option<u64>,
+        /// The max number of entries returned. If you set this too high, your query runs out of gas.
+        /// When unset, an implementation defined default will be used.
+        limit: Option<u64>,
+    },
 }
 
 // GetLotto response, can be null or Lotto
@@ -60,18 +86,20 @@ pub struct GetLottoResponse {
 pub struct LottoResponse {
     /// True if expired, False if not expired
     pub is_expired: bool,
-    pub nonce: u32,
-    pub deposit: Coin,
+    pub nonce: u64,
+    pub ticket_price: Coin,
     pub balance: Uint128,
-    pub depositors: Vec<String>,
+    pub participants: Vec<String>,
     pub expiration: Timestamp, // how to set expiration
     pub winners: Option<Vec<String>>,
     pub creator: String,
+    pub number_of_winners: u32,
+    pub community_pool_percentage: u32,
 }
 #[cw_serde]
 pub struct LottosResponse {
     /// True if expired, False if not expired
-    pub lottos: Vec<Lotto>,
+    pub lottos: Vec<LottoResponse>,
 }
 
 #[cw_serde]

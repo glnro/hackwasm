@@ -7,9 +7,12 @@ pub struct Config {
     pub nois_proxy: Addr,
     // Only the manager is able to withdraw funds from the contract
     pub manager: Addr,
-    pub lotto_nonce: u32,
+    pub lotto_nonce: u64,
     pub community_pool: Addr,
-    // TODO Add comission rates
+    // commission that will stay in the contract
+    pub protocol_commission_percent: u32,
+    // commission that will got to the creator of the lotto
+    pub creator_commission_percent: u32,
 }
 
 #[cw_serde]
@@ -26,18 +29,18 @@ pub struct Lotto {
     // The address of the lotto winners
     pub winners: Option<Vec<Addr>>,
     // This is the lotto id
-    pub nonce: u32,
+    pub nonce: u64,
     // Creating a lotto is a permissionless transaction.
     // Anyone can create a lotto and are incentivised to do so
     pub creator: Addr,
     // How many winners will share the lotto prize
     pub number_of_winners: usize,
-    // List of addresses (like a community pool) to get a share from the prize
-    pub funded_addresses: Vec<(Addr, Uint128)>,
+    // Community pool percentage
+    pub community_pool_percentage: u32,
 }
 
 pub const CONFIG_KEY: &str = "config";
 pub const LOTTOS_KEY: &str = "lottos";
 
 pub const CONFIG: Item<Config> = Item::new(CONFIG_KEY);
-pub const LOTTOS: Map<u32, Lotto> = Map::new(LOTTOS_KEY);
+pub const LOTTOS: Map<u64, Lotto> = Map::new(LOTTOS_KEY);

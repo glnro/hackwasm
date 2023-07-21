@@ -1,19 +1,19 @@
-use crate::msg::{ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, QueryMsg};
+use crate::msg::{
+    ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse, QueryMsg,
+};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    ensure_eq, to_binary, Attribute, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, QueryResponse,
-    Response, StdResult, Uint128, WasmMsg,
+    ensure_eq, to_binary, Attribute, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Order,
+    QueryResponse, Response, StdResult, Uint128, WasmMsg,
 };
+use cw_storage_plus::Bound;
 use nois::{NoisCallback, ProxyExecuteMsg};
 
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::state::{Config, Lotto, CONFIG, LOTTOS};
-
-const PROTOCOL_COMMISSION_PERCENT: u32 = 5;
-const CREATOR_COMMISSIION_PERCENT: u32 = 10;
 
 /*
 // version info for migration info
@@ -42,12 +42,20 @@ pub fn instantiate(
         .api
         .addr_validate(&msg.nois_proxy)
         .map_err(|_| ContractError::InvalidAddress {})?;
+    let protocol_commission_percent = msg.protocol_commission_percent;
+    let creator_commission_percent = msg.creator_commission_percent;
+
+    if protocol_commission_percent + creator_commission_percent >= 100 {
+        return Err(ContractError::IncorrectRates {});
+    }
 
     let cnfg = Config {
         manager: addr,
         lotto_nonce: 0,
         nois_proxy: proxy,
         community_pool,
+        protocol_commission_percent,
+        creator_commission_percent,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
@@ -69,7 +77,7 @@ pub fn execute(
             ticket_price,
             duration_seconds,
             number_of_winners,
-            funded_addresses,
+            community_pool_percentage,
         } => execute_create_lotto(
             deps,
             env,
@@ -77,10 +85,27 @@ pub fn execute(
             ticket_price,
             duration_seconds,
             number_of_winners as usize,
-            funded_addresses,
+            community_pool_percentage,
         ),
         ExecuteMsg::BuyTicket { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
+        ExecuteMsg::SetConfig {
+            nois_proxy,
+            manager,
+            lotto_nonce,
+            community_pool,
+            protocol_commission_percent,
+            creator_commission_percent,
+        } => execute_set_config(
+            deps,
+            info,
+            nois_proxy,
+            manager,
+            lotto_nonce,
+            community_pool,
+            protocol_commission_percent,
+            creator_commission_percent,
+        ),
         ExecuteMsg::WithdrawAll { address, denom } => {
             execute_withdraw_all(deps, env, info, address, denom)
         }
@@ -94,7 +119,7 @@ fn execute_create_lotto(
     ticket_price: Coin,
     duration_seconds: u64,
     number_of_winners: usize,
-    funded_addresses: Vec<(String, Uint128)>,
+    community_pool_percentage: u32,
 ) -> Result<Response, ContractError> {
     // validate Timestamp
     let mut config = CONFIG.load(deps.storage)?;
@@ -102,16 +127,12 @@ fn execute_create_lotto(
 
     let expiration = env.block.time.plus_seconds(duration_seconds);
 
-    let mut funded_addresses_addr = vec![];
-
-    for address in funded_addresses {
-        let funded_addr = (
-            deps.api
-                .addr_validate(address.0.as_str())
-                .map_err(|_| ContractError::InvalidAddress {})?,
-            address.1,
-        );
-        funded_addresses_addr.push(funded_addr);
+    if config.protocol_commission_percent
+        + config.creator_commission_percent
+        + community_pool_percentage
+        >= 100
+    {
+        return Err(ContractError::IncorrectRates {});
     }
 
     let lotto = Lotto {
@@ -123,7 +144,7 @@ fn execute_create_lotto(
         winners: None,
         creator: info.sender,
         number_of_winners,
-        funded_addresses: funded_addresses_addr,
+        community_pool_percentage,
     };
 
     LOTTOS.save(deps.storage, nonce, &lotto)?;
@@ -164,11 +185,58 @@ fn validate_payment(deposit: &Coin, funds: &[Coin]) -> Result<(), ContractError>
     Err(ContractError::InvalidPayment)
 }
 
+fn execute_set_config(
+    deps: DepsMut,
+    info: MessageInfo,
+    nois_proxy: Option<String>,
+    manager: Option<String>,
+    lotto_nonce: Option<u64>,
+    community_pool: Option<String>,
+    protocol_commission_percent: Option<u32>,
+    creator_commission_percent: Option<u32>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
+
+    let manager = match manager {
+        Some(ma) => deps.api.addr_validate(&ma)?,
+        None => config.manager,
+    };
+    let nois_proxy = match nois_proxy {
+        Some(np) => deps.api.addr_validate(&np)?,
+        None => config.nois_proxy,
+    };
+    let community_pool = match community_pool {
+        Some(cp) => deps.api.addr_validate(&cp)?,
+        None => config.community_pool,
+    };
+    let lotto_nonce = lotto_nonce.unwrap_or(config.lotto_nonce);
+    let protocol_commission_percent =
+        protocol_commission_percent.unwrap_or(config.protocol_commission_percent);
+    let creator_commission_percent =
+        creator_commission_percent.unwrap_or(config.creator_commission_percent);
+
+    // TODO Check that the commissions are less than 100% and that the new values don't mess up with currently running lottos
+
+    let new_config = Config {
+        manager,
+        nois_proxy,
+        lotto_nonce,
+        community_pool,
+        protocol_commission_percent,
+        creator_commission_percent,
+    };
+
+    CONFIG.save(deps.storage, &new_config)?;
+
+    Ok(Response::default().add_attribute("action", "set_config"))
+}
+
 fn execute_deposit_lotto(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    lotto_id: u32,
+    lotto_id: u64,
 ) -> Result<Response, ContractError> {
     if !LOTTOS.has(deps.storage, lotto_id) {
         return Err(ContractError::LottoNotFound {});
@@ -227,7 +295,7 @@ pub fn execute_receive(
 
     // extract lotto nonce
     let job_id = callback.job_id;
-    let lotto_nonce: u32 = job_id
+    let lotto_nonce: u64 = job_id
         .strip_prefix("lotto-")
         .expect("Strange, how is the job-id not prefixed with lotto-")
         .parse()
@@ -246,11 +314,13 @@ pub fn execute_receive(
 
     let amount_creator = lotto
         .balance
-        .mul_floor((MANAGER_COMMISSIION_PERCENT as u128, 100));
+        .mul_floor((config.creator_commission_percent as u128, 100));
     let amount_protocol = lotto
         .balance
-        .mul_floor((PROTOCOL_COMMISSION_PERCENT as u128, 100));
-    let amount_community_pool = lotto.balance.mul_floor((lotto. as u128, 100));
+        .mul_floor((config.protocol_commission_percent as u128, 100));
+    let amount_community_pool = lotto
+        .balance
+        .mul_floor((lotto.community_pool_percentage as u128, 100));
     let prize_amount = lotto.balance - (amount_protocol + amount_creator + amount_community_pool);
     let amount_winner = prize_amount.multiply_ratio(
         Uint128::new(1),
@@ -300,7 +370,7 @@ pub fn execute_receive(
         winners: Some(winners.clone()),
         creator: lotto.creator,
         number_of_winners: lotto.number_of_winners,
-        funded_addresses: lotto.funded_addresses,
+        community_pool_percentage: lotto.community_pool_percentage,
     };
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
 
@@ -377,12 +447,34 @@ fn execute_withdraw_all(
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
     let response = match msg {
         QueryMsg::Lotto { lotto_nonce } => to_binary(&query_lotto(deps, env, lotto_nonce)?)?,
+        QueryMsg::LottosDesc {
+            creator: _,
+            start_after,
+            limit,
+        } => to_binary(&query_lottos(
+            deps,
+            env,
+            start_after,
+            limit,
+            Order::Descending,
+        )?)?,
+        QueryMsg::LottosAsc {
+            creator: _,
+            start_after,
+            limit,
+        } => to_binary(&query_lottos(
+            deps,
+            env,
+            start_after,
+            limit,
+            Order::Ascending,
+        )?)?,
         QueryMsg::Config {} => to_binary(&query_config(deps)?)?,
     };
     Ok(response)
 }
 
-fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
+fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
     let lotto = LOTTOS.load(deps.storage, nonce)?;
     let winners = match lotto.winners {
         Some(winners) => Some(winners.iter().map(|wn| wn.clone().into_string()).collect()),
@@ -391,9 +483,9 @@ fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
-        deposit: lotto.ticket_price,
+        ticket_price: lotto.ticket_price,
         balance: lotto.balance,
-        depositors: lotto
+        participants: lotto
             .participants
             .iter()
             .map(|dep| dep.to_string())
@@ -402,7 +494,54 @@ fn query_lotto(deps: Deps, env: Env, nonce: u32) -> StdResult<LottoResponse> {
         is_expired,
         expiration: lotto.expiration,
         creator: lotto.creator.to_string(),
+        number_of_winners: lotto.number_of_winners as u32,
+        community_pool_percentage: lotto.community_pool_percentage,
     })
+}
+
+fn query_lottos(
+    deps: Deps,
+    env: Env,
+    start_after: Option<u64>,
+    limit: Option<u64>,
+    order: Order,
+) -> StdResult<LottosResponse> {
+    let limit: usize = limit.unwrap_or(100) as usize;
+    let (low_bound, top_bound) = match order {
+        Order::Ascending => (start_after.map(Bound::exclusive), None),
+        Order::Descending => (None, start_after.map(Bound::exclusive)),
+    };
+    let lottos: Vec<LottoResponse> = LOTTOS
+        .range(deps.storage, low_bound, top_bound, order)
+        .take(limit)
+        .map(|c| {
+            c.map(|(nonce, lotto)| {
+                let winners = match lotto.winners {
+                    Some(winners) => {
+                        Some(winners.iter().map(|wn| wn.clone().into_string()).collect())
+                    }
+                    None => None,
+                };
+                LottoResponse {
+                    ticket_price: lotto.ticket_price,
+                    balance: lotto.balance,
+                    participants: lotto
+                        .participants
+                        .iter()
+                        .map(|dep| dep.to_string())
+                        .collect(),
+                    expiration: lotto.expiration,
+                    winners,
+                    nonce,
+                    creator: lotto.creator.to_string(),
+                    number_of_winners: lotto.number_of_winners as u32,
+                    community_pool_percentage: lotto.community_pool_percentage,
+                    is_expired: env.block.time > lotto.expiration,
+                }
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(LottosResponse { lottos })
 }
 
 fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
@@ -424,7 +563,7 @@ mod tests {
     const CREATOR: &str = "creator1";
     const PROXY_ADDRESS: &str = "the proxy of choice";
     const MANAGER: &str = "manager";
-    const COM_POOL: &str = "com_pool";
+    const COM_POOL: &str = "community_pool";
 
     fn instantiate_contract() -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
         let mut deps = mock_dependencies();
@@ -432,6 +571,8 @@ mod tests {
             manager: MANAGER.to_string(),
             nois_proxy: PROXY_ADDRESS.to_string(),
             community_pool: COM_POOL.to_string(),
+            protocol_commission_percent: 5,
+            creator_commission_percent: 15,
         };
 
         let info = mock_info(CREATOR, &[]);
@@ -451,6 +592,64 @@ mod tests {
     }
 
     #[test]
+    fn query_lottos_works() {
+        let mut deps = instantiate_contract();
+        let env = mock_env();
+        // Create few lottos
+        // lotto-0
+        let info = mock_info(CREATOR, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        // lotto-1
+        let info = mock_info(CREATOR, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        // lotto-2
+        let info = mock_info(CREATOR, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        let LottosResponse { lottos } = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::LottosAsc {
+                    creator: "creator".to_string(),
+                    start_after: None,
+                    limit: Some(10),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
+        assert_eq!(response_lotto_nonces, [0, 1, 2]);
+    }
+    #[test]
     fn lotto_works() {
         let mut deps = instantiate_contract();
         let env = mock_env();
@@ -464,7 +663,7 @@ mod tests {
             },
             duration_seconds: 90,
             number_of_winners: 2,
-            funded_addresses: vec![(COM_POOL.to_string(), Uint128::new(1))],
+            community_pool_percentage: 20,
         };
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -519,7 +718,7 @@ mod tests {
                 job_id: "lotto-0".to_string(),
                 published: Timestamp::from_seconds(1682086395),
                 randomness: HexBinary::from_hex(
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa129",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa115",
                 )
                 .unwrap(),
             },
@@ -531,28 +730,35 @@ mod tests {
             vec![
                 Attribute::new("action", "receive-randomness-and-send-prize"),
                 Attribute::new("job_id", "lotto-0"),
-                Attribute::new("winner_send_amount", "42500000untrn"),
+                Attribute::new("winner_send_amount", "150000000untrn"),
             ]
         );
         let expected = vec![
             SubMsg::new(BankMsg::Send {
-                to_address: "depositor1".to_string(),
+                to_address: "community_pool".to_string(),
                 amount: vec![Coin {
-                    amount: Uint128::new(42500000),
-                    denom: "untrn".to_string(),
-                }],
-            }),
-            SubMsg::new(BankMsg::Send {
-                to_address: "com_pool".to_string(),
-                amount: vec![Coin {
-                    amount: Uint128::new(42500000),
+                    amount: Uint128::new(100_000000),
                     denom: "untrn".to_string(),
                 }],
             }),
             SubMsg::new(BankMsg::Send {
                 to_address: "creator1".to_string(),
                 amount: vec![Coin {
-                    amount: Uint128::new(10_000_000),
+                    amount: Uint128::new(75_000000),
+                    denom: "untrn".to_string(),
+                }],
+            }),
+            SubMsg::new(BankMsg::Send {
+                to_address: "participant-4".to_string(),
+                amount: vec![Coin {
+                    amount: Uint128::new(150_000000),
+                    denom: "untrn".to_string(),
+                }],
+            }),
+            SubMsg::new(BankMsg::Send {
+                to_address: "participant-5".to_string(),
+                amount: vec![Coin {
+                    amount: Uint128::new(150_000000),
                     denom: "untrn".to_string(),
                 }],
             }),
