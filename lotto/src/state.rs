@@ -34,7 +34,7 @@ pub struct Lotto {
     // Anyone can create a lotto and are incentivised to do so
     pub creator: Addr,
     // How many winners will share the lotto prize
-    pub number_of_winners: usize,
+    pub number_of_winners: u32,
     // Community pool percentage
     pub community_pool_percentage: u32,
 }

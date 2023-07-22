@@ -84,7 +84,7 @@ pub fn execute(
             info,
             ticket_price,
             duration_seconds,
-            number_of_winners as usize,
+            number_of_winners,
             community_pool_percentage,
         ),
         ExecuteMsg::BuyTicket { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
@@ -118,7 +118,7 @@ fn execute_create_lotto(
     info: MessageInfo,
     ticket_price: Coin,
     duration_seconds: u64,
-    number_of_winners: usize,
+    number_of_winners: u32,
     community_pool_percentage: u32,
 ) -> Result<Response, ContractError> {
     // validate Timestamp
@@ -306,7 +306,11 @@ pub fn execute_receive(
     assert!(lotto.winners.is_none(), "Strange, there's already winners");
     let participants = lotto.participants;
 
-    let winners = nois::pick(randomness, lotto.number_of_winners, participants.clone());
+    let winners = nois::pick(
+        randomness,
+        lotto.number_of_winners as usize,
+        participants.clone(),
+    );
 
     if winners.is_empty() {
         return Err(ContractError::NoDepositors {});

@@ -20,7 +20,7 @@ pub enum ExecuteMsg {
     CreateLotto {
         ticket_price: Coin,
         duration_seconds: u64,
-        number_of_winners: u16,
+        number_of_winners: u32,
         community_pool_percentage: u32,
     },
     // TODO Kais, Update Config
