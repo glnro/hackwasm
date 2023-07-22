@@ -453,24 +453,28 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
         QueryMsg::Lotto { lotto_nonce } => to_binary(&query_lotto(deps, env, lotto_nonce)?)?,
         QueryMsg::LottosDesc {
             creator,
+            is_active,
             start_after,
             limit,
         } => to_binary(&query_lottos(
             deps,
             env,
             creator,
+            is_active,
             start_after,
             limit,
             Order::Descending,
         )?)?,
         QueryMsg::LottosAsc {
             creator,
+            is_active,
             start_after,
             limit,
         } => to_binary(&query_lottos(
             deps,
             env,
             creator,
+            is_active,
             start_after,
             limit,
             Order::Ascending,
@@ -509,6 +513,7 @@ fn query_lottos(
     deps: Deps,
     env: Env,
     creator: Option<String>,
+    is_active: Option<bool>,
     start_after: Option<u64>,
     limit: Option<u64>,
     order: Order,
@@ -523,6 +528,13 @@ fn query_lottos(
         .filter(|l| {
             if let Some(creator) = &creator {
                 l.as_ref().unwrap().1.creator.to_string() == *creator
+            } else {
+                true
+            }
+        })
+        .filter(|l| {
+            if let Some(is_active) = &is_active {
+                (l.as_ref().unwrap().1.expiration > env.block.time) == *is_active
             } else {
                 true
             }
@@ -679,6 +691,7 @@ mod tests {
                 mock_env(),
                 QueryMsg::LottosAsc {
                     creator: Some(CREATOR.to_string()),
+                    is_active: Some(true),
                     start_after: None,
                     limit: Some(10),
                 },
@@ -695,6 +708,7 @@ mod tests {
                 mock_env(),
                 QueryMsg::LottosDesc {
                     creator: Some("creator-2".to_string()),
+                    is_active: Some(true),
                     start_after: None,
                     limit: Some(10),
                 },
@@ -711,6 +725,7 @@ mod tests {
                 mock_env(),
                 QueryMsg::LottosDesc {
                     creator: None,
+                    is_active: Some(true),
                     start_after: None,
                     limit: Some(10),
                 },
@@ -727,6 +742,7 @@ mod tests {
                 mock_env(),
                 QueryMsg::LottosDesc {
                     creator: None,
+                    is_active: Some(true),
                     start_after: None,
                     limit: Some(2),
                 },
@@ -736,6 +752,23 @@ mod tests {
         .unwrap();
         let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
         assert_eq!(response_lotto_nonces, [4, 3]);
+        // Query all inactive lottos
+        let LottosResponse { lottos } = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::LottosDesc {
+                    creator: None,
+                    is_active: Some(false),
+                    start_after: None,
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
+        assert_eq!(response_lotto_nonces, [] as [u64; 0]);
     }
     #[test]
     fn lotto_works() {

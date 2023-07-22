@@ -60,6 +60,8 @@ pub enum QueryMsg {
     LottosDesc {
         // If set filters on the creator
         creator: Option<String>,
+        // If set filters on active or non active
+        is_active: Option<bool>,
         // If set only nonces smaller than this value are returned
         start_after: Option<u64>,
         /// The max number of entries returned. If you set this too high, your query runs out of gas.
@@ -70,6 +72,8 @@ pub enum QueryMsg {
     LottosAsc {
         // If set filters on the creator
         creator: Option<String>,
+        // If set filters on active or non active
+        is_active: Option<bool>,
         // If set only nonces greater than this value are returned
         start_after: Option<u64>,
         /// The max number of entries returned. If you set this too high, your query runs out of gas.
