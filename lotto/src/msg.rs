@@ -58,7 +58,8 @@ pub enum QueryMsg {
     /// Gets lottos in descending order (new to old)
     #[returns(LottosResponse)]
     LottosDesc {
-        creator: String,
+        // If set filters on the creator
+        creator: Option<String>,
         // If set only nonces smaller than this value are returned
         start_after: Option<u64>,
         /// The max number of entries returned. If you set this too high, your query runs out of gas.
@@ -67,7 +68,8 @@ pub enum QueryMsg {
     },
     #[returns(LottosResponse)]
     LottosAsc {
-        creator: String,
+        // If set filters on the creator
+        creator: Option<String>,
         // If set only nonces greater than this value are returned
         start_after: Option<u64>,
         /// The max number of entries returned. If you set this too high, your query runs out of gas.

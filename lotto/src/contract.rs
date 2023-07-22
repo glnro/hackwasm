@@ -452,23 +452,25 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
     let response = match msg {
         QueryMsg::Lotto { lotto_nonce } => to_binary(&query_lotto(deps, env, lotto_nonce)?)?,
         QueryMsg::LottosDesc {
-            creator: _,
+            creator,
             start_after,
             limit,
         } => to_binary(&query_lottos(
             deps,
             env,
+            creator,
             start_after,
             limit,
             Order::Descending,
         )?)?,
         QueryMsg::LottosAsc {
-            creator: _,
+            creator,
             start_after,
             limit,
         } => to_binary(&query_lottos(
             deps,
             env,
+            creator,
             start_after,
             limit,
             Order::Ascending,
@@ -506,6 +508,7 @@ fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
 fn query_lottos(
     deps: Deps,
     env: Env,
+    creator: Option<String>,
     start_after: Option<u64>,
     limit: Option<u64>,
     order: Order,
@@ -517,6 +520,13 @@ fn query_lottos(
     };
     let lottos: Vec<LottoResponse> = LOTTOS
         .range(deps.storage, low_bound, top_bound, order)
+        .filter(|l| {
+            if let Some(creator) = &creator {
+                l.as_ref().unwrap().1.creator.to_string() == *creator
+            } else {
+                true
+            }
+        })
         .take(limit)
         .map(|c| {
             c.map(|(nonce, lotto)| {
@@ -637,12 +647,38 @@ mod tests {
         };
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
 
+        // lotto-3
+        let info = mock_info("creator-2", &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        // lotto-4
+        let info = mock_info("creator-2", &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // Query CREATOR ASC
         let LottosResponse { lottos } = from_binary(
             &query(
                 deps.as_ref(),
                 mock_env(),
                 QueryMsg::LottosAsc {
-                    creator: "creator".to_string(),
+                    creator: Some(CREATOR.to_string()),
                     start_after: None,
                     limit: Some(10),
                 },
@@ -652,6 +688,54 @@ mod tests {
         .unwrap();
         let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
         assert_eq!(response_lotto_nonces, [0, 1, 2]);
+        // Query creator-2 desc
+        let LottosResponse { lottos } = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::LottosDesc {
+                    creator: Some("creator-2".to_string()),
+                    start_after: None,
+                    limit: Some(10),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
+        assert_eq!(response_lotto_nonces, [4, 3]);
+        // Query all creators desc
+        let LottosResponse { lottos } = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::LottosDesc {
+                    creator: None,
+                    start_after: None,
+                    limit: Some(10),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
+        assert_eq!(response_lotto_nonces, [4, 3, 2, 1, 0]);
+        // Query all creators desc with limit 2
+        let LottosResponse { lottos } = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::LottosDesc {
+                    creator: None,
+                    start_after: None,
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let response_lotto_nonces = lottos.iter().map(|b| b.nonce).collect::<Vec<u64>>();
+        assert_eq!(response_lotto_nonces, [4, 3]);
     }
     #[test]
     fn lotto_works() {
