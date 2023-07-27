@@ -13,6 +13,8 @@ pub struct Config {
     pub protocol_commission_percent: u32,
     // commission that will got to the creator of the lotto
     pub creator_commission_percent: u32,
+    // current balance of active lottos
+    pub escrow_balance: Uint128,
 }
 
 #[cw_serde]

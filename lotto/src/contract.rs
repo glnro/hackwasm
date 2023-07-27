@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use crate::msg::{
     ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse, QueryMsg,
 };
@@ -44,6 +46,7 @@ pub fn instantiate(
         .map_err(|_| ContractError::InvalidAddress {})?;
     let protocol_commission_percent = msg.protocol_commission_percent;
     let creator_commission_percent = msg.creator_commission_percent;
+    let escrow_balance: Uint128 = Uint128::new(0);
 
     if protocol_commission_percent + creator_commission_percent >= 100 {
         return Err(ContractError::IncorrectRates {});
@@ -56,6 +59,7 @@ pub fn instantiate(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
+        escrow_balance,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
@@ -96,6 +100,7 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
+            escrow_balance,
         } => execute_set_config(
             deps,
             info,
@@ -105,6 +110,7 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
+            escrow_balance,
         ),
         ExecuteMsg::WithdrawAll { address, denom } => {
             execute_withdraw_all(deps, env, info, address, denom)
@@ -194,6 +200,7 @@ fn execute_set_config(
     community_pool: Option<String>,
     protocol_commission_percent: Option<u32>,
     creator_commission_percent: Option<u32>,
+    escrow_balance: Uint128,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
@@ -225,6 +232,7 @@ fn execute_set_config(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
+        escrow_balance,
     };
 
     CONFIG.save(deps.storage, &new_config)?;
@@ -415,21 +423,27 @@ fn execute_withdraw_all(
     // Keep a state of the manager revenue
 
     let config = CONFIG.load(deps.storage)?;
+    let escrow_balance: Uint128 = config.escrow_balance;
     // check the calling address is the authorised address
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
 
-    let amount = deps
+    let contract_balance = deps
         .querier
         .query_balance(env.contract.address.clone(), denom.clone())?;
+    // let payable_amount: Uint128 = contract_balance.amount.sub(escrow_balance);
+    // let payable_amount: Uint128 = escrow_balance.sub(contract_balance.amount);
+
+    // let payable_balance: Coin = Coin::new(u128::from(payable_amount), contract_balance.denom);
+
     let msg = BankMsg::Send {
         to_address,
-        amount: vec![amount.clone()],
+        amount: vec![contract_balance.clone()],
     };
 
     let res = Response::new()
         .add_message(msg)
         .add_attribute("action", "withdraw_all")
-        .add_attribute("amount", amount.to_string());
+        .add_attribute("amount", contract_balance.to_string());
     Ok(res)
 }
 
@@ -575,6 +589,7 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     Ok(ConfigResponse {
         manager: config.manager.to_string(),
         nois_proxy: config.nois_proxy.to_string(),
+        escrow_balance: config.escrow_balance,
     })
 }
 
@@ -906,7 +921,7 @@ mod tests {
             res.attributes,
             vec![
                 Attribute::new("action", "withdraw_all"),
-                Attribute::new("amount", "withdraw_all"),
+                Attribute::new("amount", "42500000untrn" ),
             ]
         );
         let expected = vec![SubMsg::new(BankMsg::Send {

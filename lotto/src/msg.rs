@@ -31,6 +31,7 @@ pub enum ExecuteMsg {
         community_pool: Option<String>,
         protocol_commission_percent: Option<u32>,
         creator_commission_percent: Option<u32>,
+        escrow_balance: Uint128,
     },
     BuyTicket {
         lotto_id: u64,
@@ -114,4 +115,6 @@ pub struct ConfigResponse {
     pub manager: String,
     /// Address of the Nois proxy contract
     pub nois_proxy: String,
+    /// Escrow balance for active lottos deposits
+    pub escrow_balance: Uint128,
 }
