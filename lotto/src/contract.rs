@@ -249,6 +249,7 @@ fn execute_deposit_lotto(
     if !LOTTOS.has(deps.storage, lotto_id) {
         return Err(ContractError::LottoNotFound {});
     }
+    let mut config = CONFIG.load(deps.storage)?;
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
     let ticket_price = lotto.clone().ticket_price;
 
@@ -269,11 +270,14 @@ fn execute_deposit_lotto(
         .clone();
 
     lotto.balance += balance.amount;
+    // Increment contract escrow balance
+    config.escrow_balance += balance.amount;
     // Add participant address
     lotto.participants.push(info.clone().sender);
 
-    // Save the state
+    // Save the state & updated config escrow balance
     LOTTOS.save(deps.storage, lotto_id, &lotto)?;
+    CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
         .add_attribute("action", "participate")
@@ -287,7 +291,7 @@ pub fn execute_receive(
     info: MessageInfo,
     callback: NoisCallback,
 ) -> Result<Response, ContractError> {
-    let config = CONFIG.load(deps.storage)?;
+    let mut config = CONFIG.load(deps.storage)?;
 
     // callback should only be allowed to be called by the proxy contract
     // otherwise anyone can cut the randomness workflow and cheat the randomness by sending the randomness directly to this contract
@@ -344,7 +348,7 @@ pub fn execute_receive(
     let mut msgs = vec![
         // Community Pool
         BankMsg::Send {
-            to_address: config.community_pool.into_string(),
+            to_address: config.community_pool.clone().into_string(),
             amount: vec![Coin {
                 amount: amount_community_pool,
                 denom: denom.clone(),
@@ -376,7 +380,7 @@ pub fn execute_receive(
     let new_lotto = Lotto {
         nonce: lotto_nonce,
         ticket_price: lotto.ticket_price,
-        balance: lotto.balance,
+        balance: lotto.balance.clone(),
         expiration: lotto.expiration,
         participants,
         winners: Some(winners.clone()),
@@ -384,7 +388,12 @@ pub fn execute_receive(
         number_of_winners: lotto.number_of_winners,
         community_pool_percentage: lotto.community_pool_percentage,
     };
+
+    let new_balance: Uint128 = config.escrow_balance.clone().sub(lotto.balance);
+    config.escrow_balance = new_balance;
+
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
+    CONFIG.save(deps.storage, &config)?;
 
     // msgs.push(CosmosMsg::Stargate {
     //     type_url: "/cosmos.distribution.v1beta1.MsgFundCommunityPool".to_string(),
@@ -423,27 +432,27 @@ fn execute_withdraw_all(
     // Keep a state of the manager revenue
 
     let config = CONFIG.load(deps.storage)?;
-    let escrow_balance: Uint128 = config.escrow_balance;
+    let escrow_balance: Uint128 = config.escrow_balance.clone();
     // check the calling address is the authorised address
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
 
     let contract_balance = deps
         .querier
         .query_balance(env.contract.address.clone(), denom.clone())?;
-    // let payable_amount: Uint128 = contract_balance.amount.sub(escrow_balance);
+    let payable_amount: Uint128 = contract_balance.amount.sub(escrow_balance);
     // let payable_amount: Uint128 = escrow_balance.sub(contract_balance.amount);
 
-    // let payable_balance: Coin = Coin::new(u128::from(payable_amount), contract_balance.denom);
+    let payable_balance: Coin = Coin::new(u128::from(payable_amount), contract_balance.denom);
 
     let msg = BankMsg::Send {
         to_address,
-        amount: vec![contract_balance.clone()],
+        amount: vec![payable_balance.clone()],
     };
 
     let res = Response::new()
         .add_message(msg)
         .add_attribute("action", "withdraw_all")
-        .add_attribute("amount", contract_balance.to_string());
+        .add_attribute("amount", payable_balance.to_string());
     Ok(res)
 }
 
@@ -921,7 +930,7 @@ mod tests {
             res.attributes,
             vec![
                 Attribute::new("action", "withdraw_all"),
-                Attribute::new("amount", "42500000untrn" ),
+                Attribute::new("amount", "25000000untrn" ),
             ]
         );
         let expected = vec![SubMsg::new(BankMsg::Send {
