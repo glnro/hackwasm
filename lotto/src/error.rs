@@ -36,4 +36,7 @@ pub enum ContractError {
 
     #[error("Lotto Deposit Stage Ended")]
     LottoDepositStageEnded,
+
+    #[error("Incorrect Rates")]
+    IncorrectRates,
 }
