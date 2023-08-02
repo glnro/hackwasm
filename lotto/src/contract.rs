@@ -330,15 +330,10 @@ pub fn execute_receive(
         return Err(ContractError::NoDepositors {});
     }
 
-    let amount_creator = lotto
-        .balance
-        .mul_floor((config.creator_commission_percent as u128, 100));
-    let amount_protocol = lotto
-        .balance
-        .mul_floor((config.protocol_commission_percent as u128, 100));
-    let amount_community_pool = lotto
-        .balance
-        .mul_floor((lotto.community_pool_percentage as u128, 100));
+    let amount_creator = get_percentage(lotto.balance, config.creator_commission_percent);
+    let amount_protocol = get_percentage(lotto.balance, config.protocol_commission_percent);
+    let amount_community_pool = get_percentage(lotto.balance, lotto.community_pool_percentage);
+
     let prize_amount = lotto.balance - (amount_protocol + amount_creator + amount_community_pool);
     let amount_winner = prize_amount.multiply_ratio(
         Uint128::new(1),
@@ -424,6 +419,10 @@ pub fn execute_receive(
             .to_string(),
         ), // actual send amount
     ]))
+}
+
+fn get_percentage(amount: Uint128, ratio: u32) -> Uint128 {
+    amount.mul_floor((ratio as u128, 100))
 }
 
 fn execute_withdraw_all(
