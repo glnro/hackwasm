@@ -31,7 +31,7 @@ pub enum ExecuteMsg {
         community_pool: Option<String>,
         protocol_commission_percent: Option<u32>,
         creator_commission_percent: Option<u32>,
-        escrow_balance: Uint128,
+        is_paused: Option<bool>,
     },
     BuyTicket {
         lotto_id: u64,
@@ -56,6 +56,9 @@ pub enum QueryMsg {
     Config {},
     #[returns(LottoResponse)]
     Lotto { lotto_nonce: u64 },
+    /// Gets protocol balances in all denoms
+    #[returns(ProtocolBalancesResponse)]
+    ProtocolBalances {},
     /// Gets lottos in descending order (new to old)
     #[returns(LottosResponse)]
     LottosDesc {
@@ -115,6 +118,13 @@ pub struct ConfigResponse {
     pub manager: String,
     /// Address of the Nois proxy contract
     pub nois_proxy: String,
-    /// Escrow balance for active lottos deposits
-    pub escrow_balance: Uint128,
+    /// If set to true the contract is paused
+    /// When a contract is paused the creation of lottos is not possible
+    pub is_paused: bool,
+}
+
+#[cw_serde]
+pub struct ProtocolBalancesResponse {
+    /// list of all balances in different denoms
+    pub balances: Vec<Coin>,
 }

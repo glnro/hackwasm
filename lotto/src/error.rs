@@ -37,6 +37,12 @@ pub enum ContractError {
     #[error("Lotto Deposit Stage Ended")]
     LottoDepositStageEnded,
 
+    #[error("The protocol does not own anything in {denom:?} ")]
+    ProtocolBalanceDoesNotOwnSuchDenom { denom: String },
+
+    #[error("Contract is paused")]
+    ContractIsPaused,
+
     #[error("Incorrect Rates")]
     IncorrectRates,
 }

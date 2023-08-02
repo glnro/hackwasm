@@ -1,7 +1,6 @@
-use std::ops::Sub;
-
 use crate::msg::{
-    ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse, QueryMsg,
+    ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse,
+    ProtocolBalancesResponse, QueryMsg,
 };
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
@@ -15,7 +14,7 @@ use nois::{NoisCallback, ProxyExecuteMsg};
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::state::{Config, Lotto, CONFIG, LOTTOS};
+use crate::state::{Config, Lotto, CONFIG, LOTTOS, PROTOCOL_BALANCES};
 
 /*
 // version info for migration info
@@ -46,7 +45,6 @@ pub fn instantiate(
         .map_err(|_| ContractError::InvalidAddress {})?;
     let protocol_commission_percent = msg.protocol_commission_percent;
     let creator_commission_percent = msg.creator_commission_percent;
-    let escrow_balance: Uint128 = Uint128::new(0);
 
     if protocol_commission_percent + creator_commission_percent >= 100 {
         return Err(ContractError::IncorrectRates {});
@@ -59,7 +57,7 @@ pub fn instantiate(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
-        escrow_balance,
+        is_paused: false,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
@@ -91,7 +89,7 @@ pub fn execute(
             number_of_winners,
             community_pool_percentage,
         ),
-        ExecuteMsg::BuyTicket { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
+        ExecuteMsg::BuyTicket { lotto_id } => execute_buy_ticket(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
         ExecuteMsg::SetConfig {
             nois_proxy,
@@ -100,7 +98,7 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
-            escrow_balance,
+            is_paused,
         } => execute_set_config(
             deps,
             info,
@@ -110,10 +108,10 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
-            escrow_balance,
+            is_paused,
         ),
         ExecuteMsg::WithdrawAll { address, denom } => {
-            execute_withdraw_all(deps, env, info, address, denom)
+            execute_withdraw_all(deps, info, address, denom)
         }
     }
 }
@@ -130,6 +128,10 @@ fn execute_create_lotto(
     // validate Timestamp
     let mut config = CONFIG.load(deps.storage)?;
     let mut nonce = config.lotto_nonce;
+
+    if config.is_paused {
+        return Err(ContractError::ContractIsPaused {});
+    };
 
     let expiration = env.block.time.plus_seconds(duration_seconds);
 
@@ -200,7 +202,7 @@ fn execute_set_config(
     community_pool: Option<String>,
     protocol_commission_percent: Option<u32>,
     creator_commission_percent: Option<u32>,
-    escrow_balance: Uint128,
+    is_paused: Option<bool>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
@@ -223,6 +225,8 @@ fn execute_set_config(
     let creator_commission_percent =
         creator_commission_percent.unwrap_or(config.creator_commission_percent);
 
+    let is_paused = is_paused.unwrap_or(config.is_paused);
+
     // TODO Check that the commissions are less than 100% and that the new values don't mess up with currently running lottos
 
     let new_config = Config {
@@ -232,7 +236,7 @@ fn execute_set_config(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
-        escrow_balance,
+        is_paused,
     };
 
     CONFIG.save(deps.storage, &new_config)?;
@@ -240,7 +244,7 @@ fn execute_set_config(
     Ok(Response::default().add_attribute("action", "set_config"))
 }
 
-fn execute_deposit_lotto(
+fn execute_buy_ticket(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
@@ -249,7 +253,7 @@ fn execute_deposit_lotto(
     if !LOTTOS.has(deps.storage, lotto_id) {
         return Err(ContractError::LottoNotFound {});
     }
-    let mut config = CONFIG.load(deps.storage)?;
+
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
     let ticket_price = lotto.clone().ticket_price;
 
@@ -270,14 +274,11 @@ fn execute_deposit_lotto(
         .clone();
 
     lotto.balance += balance.amount;
-    // Increment contract escrow balance
-    config.escrow_balance += balance.amount;
     // Add participant address
     lotto.participants.push(info.clone().sender);
 
     // Save the state & updated config escrow balance
     LOTTOS.save(deps.storage, lotto_id, &lotto)?;
-    CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
         .add_attribute("action", "participate")
@@ -291,7 +292,7 @@ pub fn execute_receive(
     info: MessageInfo,
     callback: NoisCallback,
 ) -> Result<Response, ContractError> {
-    let mut config = CONFIG.load(deps.storage)?;
+    let config = CONFIG.load(deps.storage)?;
 
     // callback should only be allowed to be called by the proxy contract
     // otherwise anyone can cut the randomness workflow and cheat the randomness by sending the randomness directly to this contract
@@ -389,11 +390,14 @@ pub fn execute_receive(
         community_pool_percentage: lotto.community_pool_percentage,
     };
 
-    let new_balance: Uint128 = config.escrow_balance.clone().sub(lotto.balance);
-    config.escrow_balance = new_balance;
+    // Increment protocol amount
+    let protocol_balances = PROTOCOL_BALANCES.may_load(deps.storage, denom.clone())?;
+    match protocol_balances {
+        Some(pb) => PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &(pb + amount_protocol))?,
+        None => PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &amount_protocol)?,
+    };
 
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
-    CONFIG.save(deps.storage, &config)?;
 
     // msgs.push(CosmosMsg::Stargate {
     //     type_url: "/cosmos.distribution.v1beta1.MsgFundCommunityPool".to_string(),
@@ -423,7 +427,6 @@ pub fn execute_receive(
 
 fn execute_withdraw_all(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     to_address: String,
     denom: String,
@@ -432,17 +435,23 @@ fn execute_withdraw_all(
     // Keep a state of the manager revenue
 
     let config = CONFIG.load(deps.storage)?;
-    let escrow_balance: Uint128 = config.escrow_balance.clone();
+
     // check the calling address is the authorised address
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
 
-    let contract_balance = deps
-        .querier
-        .query_balance(env.contract.address.clone(), denom.clone())?;
-    let payable_amount: Uint128 = contract_balance.amount.sub(escrow_balance);
-    // let payable_amount: Uint128 = escrow_balance.sub(contract_balance.amount);
+    let payable_amount: Uint128;
 
-    let payable_balance: Coin = Coin::new(u128::from(payable_amount), contract_balance.denom);
+    let protocol_balance = PROTOCOL_BALANCES.may_load(deps.storage, denom.clone())?;
+    if protocol_balance.is_some() {
+        payable_amount = protocol_balance.unwrap();
+    } else {
+        return Err(ContractError::ProtocolBalanceDoesNotOwnSuchDenom {
+            denom: denom.clone(),
+        });
+    };
+
+    let payable_balance: Coin = Coin::new(u128::from(payable_amount), denom.clone());
+    PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &Uint128::zero())?;
 
     let msg = BankMsg::Send {
         to_address,
@@ -474,6 +483,7 @@ fn execute_withdraw_all(
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
     let response = match msg {
         QueryMsg::Lotto { lotto_nonce } => to_binary(&query_lotto(deps, env, lotto_nonce)?)?,
+        QueryMsg::ProtocolBalances {} => to_binary(&query_protocol_balances(deps)?)?,
         QueryMsg::LottosDesc {
             creator,
             is_active,
@@ -593,12 +603,23 @@ fn query_lottos(
     Ok(LottosResponse { lottos })
 }
 
+fn query_protocol_balances(deps: Deps) -> StdResult<ProtocolBalancesResponse> {
+    let balances = PROTOCOL_BALANCES
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|balance| Coin {
+            denom: balance.as_ref().unwrap().clone().0,
+            amount: balance.unwrap().1,
+        })
+        .collect();
+    Ok(ProtocolBalancesResponse { balances })
+}
+
 fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config = CONFIG.load(deps.storage)?;
     Ok(ConfigResponse {
         manager: config.manager.to_string(),
         nois_proxy: config.nois_proxy.to_string(),
-        escrow_balance: config.escrow_balance,
+        is_paused: config.is_paused,
     })
 }
 
@@ -799,7 +820,7 @@ mod tests {
         let mut deps = instantiate_contract();
         let env = mock_env();
 
-        // manager starts a lotto instance
+        // creator creates a lotto instance
         let info = mock_info(CREATOR, &[]);
         let msg = ExecuteMsg::CreateLotto {
             ticket_price: Coin {
@@ -811,6 +832,33 @@ mod tests {
             community_pool_percentage: 20,
         };
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // manager sets the contract to be paused
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::SetConfig {
+            nois_proxy: None,
+            manager: None,
+            lotto_nonce: None,
+            community_pool: None,
+            protocol_commission_percent: None,
+            creator_commission_percent: None,
+            is_paused: Some(true),
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // creator creates a second lotto instance after the contract was paused
+        let info = mock_info(CREATOR, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::ContractIsPaused);
 
         // someone deposits wrong amount
         let info = mock_info(
@@ -910,6 +958,13 @@ mod tests {
         ];
         assert_eq!(res.messages, expected);
 
+        // Query protocol balances
+        let ProtocolBalancesResponse { balances } =
+            from_binary(&query(deps.as_ref(), mock_env(), QueryMsg::ProtocolBalances {}).unwrap())
+                .unwrap();
+        //let response_balances: Vec<Coin> = balances.iter().map(|b| b).collect();
+        assert_eq!(balances, vec![Coin::new(25000000, "untrn".to_string())]);
+
         // someone tries to withdraw smart contract funds
         let info = mock_info("someone", &[]);
         let msg = ExecuteMsg::WithdrawAll {
@@ -918,6 +973,20 @@ mod tests {
         };
         let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
+
+        // manager tries to withdraw BTC funds
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::WithdrawAll {
+            address: "manager_second_address".to_string(),
+            denom: "btc".to_string(),
+        };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::ProtocolBalanceDoesNotOwnSuchDenom {
+                denom: "btc".to_string()
+            }
+        );
 
         // manager tries to withdraw smart contract funds
         let info = mock_info(MANAGER, &[]);
@@ -930,13 +999,13 @@ mod tests {
             res.attributes,
             vec![
                 Attribute::new("action", "withdraw_all"),
-                Attribute::new("amount", "25000000untrn" ),
+                Attribute::new("amount", "25000000untrn"),
             ]
         );
         let expected = vec![SubMsg::new(BankMsg::Send {
             to_address: "manager_second_address".to_string(),
             amount: vec![Coin {
-                amount: Uint128::new(42500000),
+                amount: Uint128::new(25000000),
                 denom: "untrn".to_string(),
             }],
         })];
