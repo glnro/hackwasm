@@ -193,6 +193,7 @@ fn validate_payment(deposit: &Coin, funds: &[Coin]) -> Result<(), ContractError>
     Err(ContractError::InvalidPayment)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_set_config(
     deps: DepsMut,
     info: MessageInfo,
@@ -381,7 +382,7 @@ pub fn execute_receive(
     let new_lotto = Lotto {
         nonce: lotto_nonce,
         ticket_price: lotto.ticket_price,
-        balance: lotto.balance.clone(),
+        balance: lotto.balance,
         expiration: lotto.expiration,
         participants,
         winners: Some(winners.clone()),
@@ -442,8 +443,8 @@ fn execute_withdraw_all(
     let payable_amount: Uint128;
 
     let protocol_balance = PROTOCOL_BALANCES.may_load(deps.storage, denom.clone())?;
-    if protocol_balance.is_some() {
-        payable_amount = protocol_balance.unwrap();
+    if let Some(pb) = protocol_balance {
+        payable_amount = pb;
     } else {
         return Err(ContractError::ProtocolBalanceDoesNotOwnSuchDenom {
             denom: denom.clone(),
@@ -519,10 +520,9 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
 
 fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
     let lotto = LOTTOS.load(deps.storage, nonce)?;
-    let winners = match lotto.winners {
-        Some(winners) => Some(winners.iter().map(|wn| wn.clone().into_string()).collect()),
-        None => None,
-    };
+    let winners = lotto
+        .winners
+        .map(|winners| winners.iter().map(|wn| wn.clone().into_string()).collect());
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
@@ -537,7 +537,7 @@ fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
         is_expired,
         expiration: lotto.expiration,
         creator: lotto.creator.to_string(),
-        number_of_winners: lotto.number_of_winners as u32,
+        number_of_winners: lotto.number_of_winners,
         community_pool_percentage: lotto.community_pool_percentage,
     })
 }
@@ -560,7 +560,7 @@ fn query_lottos(
         .range(deps.storage, low_bound, top_bound, order)
         .filter(|l| {
             if let Some(creator) = &creator {
-                l.as_ref().unwrap().1.creator.to_string() == *creator
+                l.as_ref().unwrap().1.creator.as_ref() == creator
             } else {
                 true
             }
@@ -575,12 +575,10 @@ fn query_lottos(
         .take(limit)
         .map(|c| {
             c.map(|(nonce, lotto)| {
-                let winners = match lotto.winners {
-                    Some(winners) => {
-                        Some(winners.iter().map(|wn| wn.clone().into_string()).collect())
-                    }
-                    None => None,
-                };
+                let winners = lotto
+                    .winners
+                    .map(|winners| winners.iter().map(|wn| wn.clone().into_string()).collect());
+
                 LottoResponse {
                     ticket_price: lotto.ticket_price,
                     balance: lotto.balance,
@@ -593,7 +591,7 @@ fn query_lottos(
                     winners,
                     nonce,
                     creator: lotto.creator.to_string(),
-                    number_of_winners: lotto.number_of_winners as u32,
+                    number_of_winners: lotto.number_of_winners,
                     community_pool_percentage: lotto.community_pool_percentage,
                     is_expired: env.block.time > lotto.expiration,
                 }
