@@ -13,6 +13,9 @@ pub struct Config {
     pub protocol_commission_percent: u32,
     // commission that will got to the creator of the lotto
     pub creator_commission_percent: u32,
+    // If set to true the contract is paused
+    // When a contract is paused the creation of lottos is not possible
+    pub is_paused: bool,
 }
 
 #[cw_serde]
@@ -41,6 +44,8 @@ pub struct Lotto {
 
 pub const CONFIG_KEY: &str = "config";
 pub const LOTTOS_KEY: &str = "lottos";
+pub const PROTOCOL_BALANCES_KEY: &str = "balances";
 
 pub const CONFIG: Item<Config> = Item::new(CONFIG_KEY);
 pub const LOTTOS: Map<u64, Lotto> = Map::new(LOTTOS_KEY);
+pub const PROTOCOL_BALANCES: Map<String, Uint128> = Map::new(PROTOCOL_BALANCES_KEY);

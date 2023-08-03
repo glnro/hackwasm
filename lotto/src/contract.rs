@@ -1,5 +1,6 @@
 use crate::msg::{
-    ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse, QueryMsg,
+    ConfigResponse, ExecuteMsg, InstantiateMsg, LottoResponse, LottosResponse,
+    ProtocolBalancesResponse, QueryMsg,
 };
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
@@ -13,7 +14,7 @@ use nois::{NoisCallback, ProxyExecuteMsg};
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::state::{Config, Lotto, CONFIG, LOTTOS};
+use crate::state::{Config, Lotto, CONFIG, LOTTOS, PROTOCOL_BALANCES};
 
 /*
 // version info for migration info
@@ -56,6 +57,7 @@ pub fn instantiate(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
+        is_paused: false,
     };
 
     CONFIG.save(deps.storage, &cnfg)?;
@@ -87,7 +89,7 @@ pub fn execute(
             number_of_winners,
             community_pool_percentage,
         ),
-        ExecuteMsg::BuyTicket { lotto_id } => execute_deposit_lotto(deps, env, info, lotto_id),
+        ExecuteMsg::BuyTicket { lotto_id } => execute_buy_ticket(deps, env, info, lotto_id),
         ExecuteMsg::NoisReceive { callback } => execute_receive(deps, env, info, callback),
         ExecuteMsg::SetConfig {
             nois_proxy,
@@ -96,6 +98,7 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
+            is_paused,
         } => execute_set_config(
             deps,
             info,
@@ -105,9 +108,10 @@ pub fn execute(
             community_pool,
             protocol_commission_percent,
             creator_commission_percent,
+            is_paused,
         ),
         ExecuteMsg::WithdrawAll { address, denom } => {
-            execute_withdraw_all(deps, env, info, address, denom)
+            execute_withdraw_all(deps, info, address, denom)
         }
     }
 }
@@ -124,6 +128,10 @@ fn execute_create_lotto(
     // validate Timestamp
     let mut config = CONFIG.load(deps.storage)?;
     let mut nonce = config.lotto_nonce;
+
+    if config.is_paused {
+        return Err(ContractError::ContractIsPaused {});
+    };
 
     let expiration = env.block.time.plus_seconds(duration_seconds);
 
@@ -185,6 +193,7 @@ fn validate_payment(deposit: &Coin, funds: &[Coin]) -> Result<(), ContractError>
     Err(ContractError::InvalidPayment)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_set_config(
     deps: DepsMut,
     info: MessageInfo,
@@ -194,6 +203,7 @@ fn execute_set_config(
     community_pool: Option<String>,
     protocol_commission_percent: Option<u32>,
     creator_commission_percent: Option<u32>,
+    is_paused: Option<bool>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
@@ -216,6 +226,8 @@ fn execute_set_config(
     let creator_commission_percent =
         creator_commission_percent.unwrap_or(config.creator_commission_percent);
 
+    let is_paused = is_paused.unwrap_or(config.is_paused);
+
     // TODO Check that the commissions are less than 100% and that the new values don't mess up with currently running lottos
 
     let new_config = Config {
@@ -225,6 +237,7 @@ fn execute_set_config(
         community_pool,
         protocol_commission_percent,
         creator_commission_percent,
+        is_paused,
     };
 
     CONFIG.save(deps.storage, &new_config)?;
@@ -232,7 +245,7 @@ fn execute_set_config(
     Ok(Response::default().add_attribute("action", "set_config"))
 }
 
-fn execute_deposit_lotto(
+fn execute_buy_ticket(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
@@ -241,6 +254,7 @@ fn execute_deposit_lotto(
     if !LOTTOS.has(deps.storage, lotto_id) {
         return Err(ContractError::LottoNotFound {});
     }
+
     let mut lotto = LOTTOS.load(deps.storage, lotto_id)?;
     let ticket_price = lotto.clone().ticket_price;
 
@@ -264,7 +278,7 @@ fn execute_deposit_lotto(
     // Add participant address
     lotto.participants.push(info.clone().sender);
 
-    // Save the state
+    // Save the state & updated config escrow balance
     LOTTOS.save(deps.storage, lotto_id, &lotto)?;
 
     Ok(Response::new()
@@ -316,15 +330,10 @@ pub fn execute_receive(
         return Err(ContractError::NoDepositors {});
     }
 
-    let amount_creator = lotto
-        .balance
-        .mul_floor((config.creator_commission_percent as u128, 100));
-    let amount_protocol = lotto
-        .balance
-        .mul_floor((config.protocol_commission_percent as u128, 100));
-    let amount_community_pool = lotto
-        .balance
-        .mul_floor((lotto.community_pool_percentage as u128, 100));
+    let amount_creator = get_percentage(lotto.balance, config.creator_commission_percent);
+    let amount_protocol = get_percentage(lotto.balance, config.protocol_commission_percent);
+    let amount_community_pool = get_percentage(lotto.balance, lotto.community_pool_percentage);
+
     let prize_amount = lotto.balance - (amount_protocol + amount_creator + amount_community_pool);
     let amount_winner = prize_amount.multiply_ratio(
         Uint128::new(1),
@@ -336,7 +345,7 @@ pub fn execute_receive(
     let mut msgs = vec![
         // Community Pool
         BankMsg::Send {
-            to_address: config.community_pool.into_string(),
+            to_address: config.community_pool.clone().into_string(),
             amount: vec![Coin {
                 amount: amount_community_pool,
                 denom: denom.clone(),
@@ -376,6 +385,14 @@ pub fn execute_receive(
         number_of_winners: lotto.number_of_winners,
         community_pool_percentage: lotto.community_pool_percentage,
     };
+
+    // Increment protocol amount
+    let protocol_balances = PROTOCOL_BALANCES.may_load(deps.storage, denom.clone())?;
+    match protocol_balances {
+        Some(pb) => PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &(pb + amount_protocol))?,
+        None => PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &amount_protocol)?,
+    };
+
     LOTTOS.save(deps.storage, lotto_nonce, &new_lotto)?;
 
     // msgs.push(CosmosMsg::Stargate {
@@ -404,9 +421,12 @@ pub fn execute_receive(
     ]))
 }
 
+fn get_percentage(amount: Uint128, ratio: u32) -> Uint128 {
+    amount.mul_floor((ratio as u128, 100))
+}
+
 fn execute_withdraw_all(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     to_address: String,
     denom: String,
@@ -415,21 +435,33 @@ fn execute_withdraw_all(
     // Keep a state of the manager revenue
 
     let config = CONFIG.load(deps.storage)?;
+
     // check the calling address is the authorised address
     ensure_eq!(info.sender, config.manager, ContractError::Unauthorized);
 
-    let amount = deps
-        .querier
-        .query_balance(env.contract.address.clone(), denom.clone())?;
+    let payable_amount: Uint128;
+
+    let protocol_balance = PROTOCOL_BALANCES.may_load(deps.storage, denom.clone())?;
+    if let Some(pb) = protocol_balance {
+        payable_amount = pb;
+    } else {
+        return Err(ContractError::ProtocolBalanceDoesNotOwnSuchDenom {
+            denom: denom.clone(),
+        });
+    };
+
+    let payable_balance: Coin = Coin::new(u128::from(payable_amount), denom.clone());
+    PROTOCOL_BALANCES.save(deps.storage, denom.clone(), &Uint128::zero())?;
+
     let msg = BankMsg::Send {
         to_address,
-        amount: vec![amount.clone()],
+        amount: vec![payable_balance.clone()],
     };
 
     let res = Response::new()
         .add_message(msg)
         .add_attribute("action", "withdraw_all")
-        .add_attribute("amount", amount.to_string());
+        .add_attribute("amount", payable_balance.to_string());
     Ok(res)
 }
 
@@ -451,6 +483,7 @@ fn execute_withdraw_all(
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
     let response = match msg {
         QueryMsg::Lotto { lotto_nonce } => to_binary(&query_lotto(deps, env, lotto_nonce)?)?,
+        QueryMsg::ProtocolBalances {} => to_binary(&query_protocol_balances(deps)?)?,
         QueryMsg::LottosDesc {
             creator,
             is_active,
@@ -486,10 +519,9 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<QueryResponse> {
 
 fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
     let lotto = LOTTOS.load(deps.storage, nonce)?;
-    let winners = match lotto.winners {
-        Some(winners) => Some(winners.iter().map(|wn| wn.clone().into_string()).collect()),
-        None => None,
-    };
+    let winners = lotto
+        .winners
+        .map(|winners| winners.iter().map(|wn| wn.clone().into_string()).collect());
     let is_expired = env.block.time > lotto.expiration;
     Ok(LottoResponse {
         nonce: lotto.nonce,
@@ -504,7 +536,7 @@ fn query_lotto(deps: Deps, env: Env, nonce: u64) -> StdResult<LottoResponse> {
         is_expired,
         expiration: lotto.expiration,
         creator: lotto.creator.to_string(),
-        number_of_winners: lotto.number_of_winners as u32,
+        number_of_winners: lotto.number_of_winners,
         community_pool_percentage: lotto.community_pool_percentage,
     })
 }
@@ -527,7 +559,7 @@ fn query_lottos(
         .range(deps.storage, low_bound, top_bound, order)
         .filter(|l| {
             if let Some(creator) = &creator {
-                l.as_ref().unwrap().1.creator.to_string() == *creator
+                l.as_ref().unwrap().1.creator.as_ref() == creator
             } else {
                 true
             }
@@ -542,12 +574,10 @@ fn query_lottos(
         .take(limit)
         .map(|c| {
             c.map(|(nonce, lotto)| {
-                let winners = match lotto.winners {
-                    Some(winners) => {
-                        Some(winners.iter().map(|wn| wn.clone().into_string()).collect())
-                    }
-                    None => None,
-                };
+                let winners = lotto
+                    .winners
+                    .map(|winners| winners.iter().map(|wn| wn.clone().into_string()).collect());
+
                 LottoResponse {
                     ticket_price: lotto.ticket_price,
                     balance: lotto.balance,
@@ -560,7 +590,7 @@ fn query_lottos(
                     winners,
                     nonce,
                     creator: lotto.creator.to_string(),
-                    number_of_winners: lotto.number_of_winners as u32,
+                    number_of_winners: lotto.number_of_winners,
                     community_pool_percentage: lotto.community_pool_percentage,
                     is_expired: env.block.time > lotto.expiration,
                 }
@@ -570,11 +600,23 @@ fn query_lottos(
     Ok(LottosResponse { lottos })
 }
 
+fn query_protocol_balances(deps: Deps) -> StdResult<ProtocolBalancesResponse> {
+    let balances = PROTOCOL_BALANCES
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|balance| Coin {
+            denom: balance.as_ref().unwrap().clone().0,
+            amount: balance.unwrap().1,
+        })
+        .collect();
+    Ok(ProtocolBalancesResponse { balances })
+}
+
 fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config = CONFIG.load(deps.storage)?;
     Ok(ConfigResponse {
         manager: config.manager.to_string(),
         nois_proxy: config.nois_proxy.to_string(),
+        is_paused: config.is_paused,
     })
 }
 
@@ -775,7 +817,7 @@ mod tests {
         let mut deps = instantiate_contract();
         let env = mock_env();
 
-        // manager starts a lotto instance
+        // creator creates a lotto instance
         let info = mock_info(CREATOR, &[]);
         let msg = ExecuteMsg::CreateLotto {
             ticket_price: Coin {
@@ -787,6 +829,33 @@ mod tests {
             community_pool_percentage: 20,
         };
         execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // manager sets the contract to be paused
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::SetConfig {
+            nois_proxy: None,
+            manager: None,
+            lotto_nonce: None,
+            community_pool: None,
+            protocol_commission_percent: None,
+            creator_commission_percent: None,
+            is_paused: Some(true),
+        };
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // creator creates a second lotto instance after the contract was paused
+        let info = mock_info(CREATOR, &[]);
+        let msg = ExecuteMsg::CreateLotto {
+            ticket_price: Coin {
+                denom: "untrn".to_string(),
+                amount: Uint128::new(100_000_000),
+            },
+            duration_seconds: 90,
+            number_of_winners: 2,
+            community_pool_percentage: 20,
+        };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(err, ContractError::ContractIsPaused);
 
         // someone deposits wrong amount
         let info = mock_info(
@@ -886,6 +955,13 @@ mod tests {
         ];
         assert_eq!(res.messages, expected);
 
+        // Query protocol balances
+        let ProtocolBalancesResponse { balances } =
+            from_binary(&query(deps.as_ref(), mock_env(), QueryMsg::ProtocolBalances {}).unwrap())
+                .unwrap();
+        //let response_balances: Vec<Coin> = balances.iter().map(|b| b).collect();
+        assert_eq!(balances, vec![Coin::new(25000000, "untrn".to_string())]);
+
         // someone tries to withdraw smart contract funds
         let info = mock_info("someone", &[]);
         let msg = ExecuteMsg::WithdrawAll {
@@ -894,6 +970,20 @@ mod tests {
         };
         let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
         assert_eq!(err, ContractError::Unauthorized {});
+
+        // manager tries to withdraw BTC funds
+        let info = mock_info(MANAGER, &[]);
+        let msg = ExecuteMsg::WithdrawAll {
+            address: "manager_second_address".to_string(),
+            denom: "btc".to_string(),
+        };
+        let err = execute(deps.as_mut(), env.clone(), info, msg).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::ProtocolBalanceDoesNotOwnSuchDenom {
+                denom: "btc".to_string()
+            }
+        );
 
         // manager tries to withdraw smart contract funds
         let info = mock_info(MANAGER, &[]);
@@ -906,13 +996,13 @@ mod tests {
             res.attributes,
             vec![
                 Attribute::new("action", "withdraw_all"),
-                Attribute::new("amount", "withdraw_all"),
+                Attribute::new("amount", "25000000untrn"),
             ]
         );
         let expected = vec![SubMsg::new(BankMsg::Send {
             to_address: "manager_second_address".to_string(),
             amount: vec![Coin {
-                amount: Uint128::new(42500000),
+                amount: Uint128::new(25000000),
                 denom: "untrn".to_string(),
             }],
         })];
